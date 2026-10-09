@@ -8,7 +8,7 @@ Git3D Universe generates a self-contained SVG that visualizes a GitHub contribut
 
 ## GitHub Marketplace
 
-Git3D Universe is published as a reusable GitHub Action. The stable release is `v1.0.1`.
+Git3D Universe is published as a reusable GitHub Action. The stable release is `v1.1.0`.
 
 Use the reviewed release tag or an immutable commit SHA in consuming workflows rather than tracking `main`.
 
@@ -24,7 +24,7 @@ Create this file in your profile repository:
 
 The workflow refreshes the SVG once per hour, chooses a light or dark theme from your local timezone, validates the generated SVG, and commits it back to the repository.
 
-For production, use the stable release tag `v1.0.1` or an immutable commit SHA.
+For production, use the stable release tag `v1.1.0` or an immutable commit SHA.
 
 ```yaml
 # Copy this file into:
@@ -108,7 +108,7 @@ jobs:
           echo "mode=${MODE}" >> "$GITHUB_OUTPUT"
 
       - name: Generate Git3D Universe
-        uses: SandeepKomal/Git3D-Universe@v1.0.1
+        uses: SandeepKomal/Git3D-Universe@v1.1.0
         with:
           username: ${{ github.repository_owner }}
           github-token: ${{ secrets.GITHUB_TOKEN }}

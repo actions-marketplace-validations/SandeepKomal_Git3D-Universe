@@ -43,7 +43,7 @@ export function prismFaces(project, u, v, size, height) {
   for (const side of sides) {
     if (project.facing(side.n[0], side.n[1]) <= 0) continue;
     const lit = Math.max(0, side.n[0] * LIGHT[0] + side.n[1] * LIGHT[1]);
-    faces.push({ pts: side.pts, shade: 0.52 + 0.4 * lit });
+    faces.push({ pts: side.pts, shade: 0.42 + 0.45 * lit });
   }
   faces.push({ pts: [P(u, v, height), P(u1, v, height), P(u1, v1, height), P(u, v1, height)], shade: 1.16, top: true });
   return faces;

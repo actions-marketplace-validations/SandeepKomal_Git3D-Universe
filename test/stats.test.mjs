@@ -38,3 +38,13 @@ test("levels scale with the busiest day", () => {
   assert.equal(levelOf(1, 20), 1);
   assert.equal(levelOf(20, 20), 4);
 });
+
+test("rank levels spread colours across active days despite one outlier", async () => {
+  const { levelByRank } = await import("../src/stats.mjs");
+  const q = [2, 4, 7];
+  assert.equal(levelByRank(0, q), 0);
+  assert.equal(levelByRank(1, q), 1);
+  assert.equal(levelByRank(4, q), 2);
+  assert.equal(levelByRank(6, q), 3);
+  assert.equal(levelByRank(113, q), 4);
+});

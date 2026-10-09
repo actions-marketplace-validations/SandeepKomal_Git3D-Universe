@@ -47,3 +47,13 @@ export function levelOf(count, max) {
   if (r < 0.75) return 3;
   return 4;
 }
+
+// Maps a daily count to a colour level 0..4 using quartile thresholds
+// [q1, q2, q3] of the active days.
+export function levelByRank(count, [q1, q2, q3]) {
+  if (count <= 0) return 0;
+  if (count <= q1) return 1;
+  if (count <= q2) return 2;
+  if (count <= q3) return 3;
+  return 4;
+}
