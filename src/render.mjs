@@ -21,7 +21,6 @@ const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "
 const esc = (s) =>
   String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&apos;" }[c]));
 const r1 = (n) => Math.round(n * 10) / 10;
-const HEX = /^#[0-9a-fA-F]{6}$/;
 
 function adjust(hex, k) {
   const ch = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
@@ -108,7 +107,7 @@ function rankThresholds(weeks) {
   return [at(0.25), at(0.5), at(0.75)];
 }
 
-function terrain(data, stats, t, project) {
+function terrain(data, stats, t, project, animate) {
   const weekCount = data.weeks.length;
   const u0 = (-weekCount * CELL) / 2;
   const v0 = (-7 * CELL) / 2;
@@ -126,7 +125,9 @@ function terrain(data, stats, t, project) {
   const size = CELL - GAP;
   const thresholds = rankThresholds(data.weeks);
   const heightOf = (count) => 6 + Math.pow(count / stats.max, 0.6) * MAX_BAR;
+  let floor = "";
   let svg = "";
+  const barBoxes = [];
   let peakTop = null;
   const jitter = lcg(7);
   for (const { u, v, day, week, row } of cells) {
@@ -135,16 +136,23 @@ function terrain(data, stats, t, project) {
     if (day.count === 0) {
       // Empty days take the floor band, with a little per-cell variation for texture.
       const band = floorAt(t.floor, (week + row / 7) / Math.max(1, weekCount - 1));
-      svg += poly(
+      floor += poly(
         [project(u, v), project(u + size, v), project(u + size, v + size), project(u, v + size)],
-        adjust(band, t.dark ? 0.9 + jitter() * 0.2 : 0.97 + jitter() * 0.06),
-        ` opacity="${t.dark ? ".9" : ".95"}" stroke="${t.cellEdge}" stroke-width=".6" stroke-opacity="${t.dark ? ".7" : ".55"}"`
+        t.dark ? adjust(band, 0.9 + jitter() * 0.2) : band,
+        ` opacity="${t.dark ? ".9" : "1"}" stroke="${t.cellEdge}" stroke-width="${t.dark ? ".6" : "1.2"}" stroke-opacity="${t.dark ? ".7" : "1"}"`
       );
       continue;
     }
     const height = heightOf(day.count);
-    for (const face of prismFaces(project, u, v, size, height)) {
-      const edge = face.top ? ` stroke="${t.cellEdge}" stroke-width=".6" stroke-opacity=".62"` : "";
+    const faces = prismFaces(project, u, v, size, height);
+    const xs = faces.flatMap((f) => f.pts.map((q) => q.x)), ys = faces.flatMap((f) => f.pts.map((q) => q.y));
+    barBoxes.push({ x0: Math.min(...xs), y0: Math.min(...ys), x1: Math.max(...xs), y1: Math.max(...ys) });
+    for (const face of faces) {
+      const edge = !face.top
+        ? ""
+        : t.neonEdges
+          ? ` stroke="${t.dark ? mix(base, "#ffffff", 0.45) : adjust(base, 0.82)}" stroke-width="1" stroke-opacity=".95"`
+          : ` stroke="${t.cellEdge}" stroke-width=".6" stroke-opacity=".62"`;
       const glow = face.top && isPeak ? ` filter="url(#glow)"` : "";
       svg += poly(face.pts, adjust(base, face.shade), `${edge}${glow}`);
     }
@@ -166,9 +174,14 @@ function terrain(data, stats, t, project) {
     .map((s) => poly([top[s.i[0]], top[s.i[1]], bottom[s.i[1]], bottom[s.i[0]]], adjust(t.plateSide, s.shade)))
     .join("");
 
-  const shadow = `<polygon points="${pts(bottom.map((p) => ({ x: p.x + 6, y: p.y + 22 })))}" fill="${t.shadow}" opacity="${t.dark ? ".75" : ".35"}" filter="url(#soft)"/>`;
+  const shadow = `<polygon points="${pts(bottom.map((p) => ({ x: p.x + 6, y: p.y + 22 })))}" fill="${t.shadow}" opacity="${t.dark ? ".75" : ".2"}" filter="url(#soft)"/>`;
   // Rim light along the two front edges catches the eye and separates plate from floor.
-  const rim = `<polyline points="${pts([top[0], top[3], top[2]])}" fill="none" stroke="url(#rimFade)" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>`;
+  // Neon tube edges: a thick glowing core with a soft halo, pink along the
+  // back edges and green along the front edges.
+  const tube = (list, color) =>
+    `<polyline points="${pts(list)}" fill="none" stroke="${color}" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" filter="url(#neon)"/>` +
+    `<polyline points="${pts(list)}" fill="none" stroke="${mix(color, "#ffffff", 0.55)}" stroke-width="0.9" stroke-linecap="round" stroke-linejoin="round"/>`;
+  const rim = tube([top[3], top[0], top[1], top[2]], t.edgeBack) + tube([top[0], top[3], top[2]], t.edgeFront);
   const plate =
     shadow +
     sides +
@@ -188,7 +201,24 @@ function terrain(data, stats, t, project) {
     months += `<line x1="${r1(a.x)}" y1="${r1(a.y + 4)}" x2="${r1(a.x)}" y2="${r1(a.y + 10)}" stroke="${t.mute}" stroke-opacity=".6"/><text x="${r1(a.x)}" y="${r1(a.y + 24)}" text-anchor="middle" font-size="12" letter-spacing=".4" fill="${t.mute}">${MONTHS[m - 1]}</text>`;
   });
 
-  return { plate, bars: svg, months, peakTop };
+  // A colour wave rolls across the year: one soft strip per week fades in and
+  // out in turn, between the floor and the bars, so bars stay solid in front.
+  // Each pass takes the next colour in the theme's wave palette.
+  let wave = "";
+  if (animate && t.wave) {
+    const period = 7;
+    const travel = 4;
+    data.weeks.forEach((_, i) => {
+      const a = u0 + i * CELL, b = a + CELL;
+      const begin = r1((i / weekCount) * travel);
+      wave += `<polygon points="${pts([project(a, v0), project(b, v0), project(b, -v0), project(a, -v0)])}" fill="${t.wave[0]}" opacity="0">` +
+        `<animate attributeName="opacity" values="0;${t.waveOpacity};0;0" keyTimes="0;0.07;0.2;1" dur="${period}s" begin="${begin}s" repeatCount="indefinite"/>` +
+        `<animate attributeName="fill" values="${t.wave.join(";")}" calcMode="discrete" dur="${period * t.wave.length}s" begin="${begin}s" repeatCount="indefinite"/>` +
+        `</polygon>`;
+    });
+  }
+
+  return { plate, bars: floor + wave + svg, months, peakTop, blockers: { plate: top, boxes: barBoxes } };
 }
 
 // A light beam rising from the busiest day, with a callout at its tip.
@@ -226,7 +256,7 @@ function planetSphere(i, r, color, seed, ringed, animate, t) {
     `<stop offset=".62" stop-color="${color}"/><stop offset=".88" stop-color="${adjust(color, 0.42)}"/>` +
     `<stop offset="1" stop-color="${adjust(color, 0.2)}"/></radialGradient>` +
     `<radialGradient id="${id}a" r="50%"><stop offset=".7" stop-color="${color}" stop-opacity="0"/>` +
-    `<stop offset=".79" stop-color="${adjust(color, 1.3)}" stop-opacity=".38"/><stop offset=".88" stop-color="${color}" stop-opacity=".1"/>` +
+    `<stop offset=".79" stop-color="${adjust(color, 1.3)}" stop-opacity="${t.neonEdges ? 0.7 : 0.38}"/><stop offset=".88" stop-color="${color}" stop-opacity="${t.neonEdges ? 0.28 : 0.1}"/>` +
     `<stop offset="1" stop-color="${color}" stop-opacity="0"/></radialGradient>` +
     `<clipPath id="${id}c"><circle r="${r1(r)}"/></clipPath>`;
 
@@ -276,7 +306,45 @@ const RING_FLATTEN = 0.2;
 // and in front of it on its near side. Rings are split into a back and a front
 // arc; each planet is drawn twice, once per layer, clipped to its half, so the
 // animated copies stay in lockstep and the far side is hidden by the terrain.
-function orbits(data, t, animate) {
+// Point on an orbit at a fraction of its length, matching animateMotion's
+// paced timing. The path starts on the left and runs through the near side first.
+function orbitWalker(R, ry) {
+  const steps = 720;
+  const pts = [], len = [0];
+  for (let k = 0; k <= steps; k++) {
+    const th = Math.PI - (2 * Math.PI * k) / steps;
+    pts.push({ x: CX + R * Math.cos(th), y: CY + ry * Math.sin(th) });
+    if (k) len.push(len[k - 1] + Math.hypot(pts[k].x - pts[k - 1].x, pts[k].y - pts[k - 1].y));
+  }
+  const total = len[steps];
+  return (f) => {
+    const target = (((f % 1) + 1) % 1) * total;
+    let k = len.findIndex((l) => l >= target);
+    if (k <= 0) return pts[0];
+    const a = (target - len[k - 1]) / (len[k] - len[k - 1] || 1);
+    return { x: pts[k - 1].x + (pts[k].x - pts[k - 1].x) * a, y: pts[k - 1].y + (pts[k].y - pts[k - 1].y) * a };
+  };
+}
+
+// True when an axis-aligned box touches the terrain: the plate's top surface
+// (a convex polygon, tested with separating axes) or any bar's bounding box.
+function hitsTerrain(box, blockers) {
+  if (!blockers) return false;
+  for (const b of blockers.boxes) if (box.x0 < b.x1 && box.x1 > b.x0 && box.y0 < b.y1 && box.y1 > b.y0) return true;
+  const poly = blockers.plate;
+  const corners = [{ x: box.x0, y: box.y0 }, { x: box.x1, y: box.y0 }, { x: box.x1, y: box.y1 }, { x: box.x0, y: box.y1 }];
+  const axes = [{ x: 1, y: 0 }, { x: 0, y: 1 }, ...poly.map((p, i) => {
+    const q = poly[(i + 1) % poly.length];
+    return { x: q.y - p.y, y: p.x - q.x };
+  })];
+  return axes.every((ax) => {
+    const proj = (list) => list.map((p) => p.x * ax.x + p.y * ax.y);
+    const a = proj(corners), b = proj(poly);
+    return Math.max(...a) > Math.min(...b) && Math.max(...b) > Math.min(...a);
+  });
+}
+
+function orbits(data, t, animate, blockers) {
   const arc = (R, sweep) => `M${CX - R},${CY} A${R},${r1(R * RING_FLATTEN)} 0 0,${sweep} ${CX + R},${CY}`;
   // Each orbit is layered: a soft glow, a crisp core line, and a fine bright
   // line on top. The near half is brighter than the far half, and in animated
@@ -302,7 +370,6 @@ function orbits(data, t, animate) {
   const repos = (data.repos || []).slice(0, 6).map((r) => ({
     name: String(r?.name ?? ""),
     stars: Math.max(0, Math.floor(Number(r?.stars)) || 0),
-    color: r?.color,
   }));
   const maxStars = Math.max(1, ...repos.map((r) => r.stars));
   const planet = (repo, i) => {
@@ -311,7 +378,8 @@ function orbits(data, t, animate) {
     const ry = r1(R * RING_FLATTEN);
     const radius = 14 + 10 * Math.sqrt(repo.stars / maxStars);
     const seed = hashName(repo.name);
-    const color = HEX.test(repo.color || "") ? repo.color : t.planets[seed % t.planets.length];
+    // Planets always use the theme's neon palette, one distinct colour each.
+    const color = t.planets[i % t.planets.length];
     const name = esc(repo.name.length > 18 ? `${repo.name.slice(0, 17)}…` : repo.name);
     const starsLabel = repo.stars > 0 ? `<tspan fill="${t.mute}" font-weight="500"> ★${repo.stars}</tspan>` : "";
     const duration = 52 + ring * 20 + i * 3;
@@ -335,34 +403,68 @@ function orbits(data, t, animate) {
     const place = animate ? "" : ` transform="translate(${r1(CX + R * Math.cos(angle))} ${r1(CY + R * RING_FLATTEN * near)})"`;
     const staticScale = animate ? "" : ` transform="scale(${r1((1 + 0.18 * near) * 100) / 100})"`;
 
+    // Names sit in their own top layer. On the near side they always show. On
+    // the far side a name shows only while it would sit in clear sky, and hides
+    // while it would overlap the grid or the bars, so it is never drawn over
+    // the terrain or cut off.
+    const chars = Math.min(repo.name.length, 18) + (repo.stars > 0 ? 2 + String(repo.stars).length : 0);
+    const labelBox = (x, y, sc) => {
+      const w = (chars * 7 + 8) * sc, base = y + (-radius - 11) * sc;
+      return { x0: x - w / 2, x1: x + w / 2, y0: base - 13 * sc, y1: base + 4 * sc };
+    };
+    const shown = (x, y, sc, isNear) => isNear || !hitsTerrain(labelBox(x, y, sc), blockers);
+    const label = `<text y="${r1(-radius - 11)}" text-anchor="middle" font-size="12" font-weight="600" fill="${t.ink}" paint-order="stroke" stroke="${t.bgOuter}" stroke-width="3" stroke-linejoin="round">${name}${starsLabel}</text>`;
     const sphere = planetSphere(i, radius, color, seed, i === 0, animate, t);
     defs.push(sphere.defs);
-    const body = `<g${place}>${motion}<g${staticScale}>${scale}
+    // Each planet is drawn twice: once behind the terrain and once in front.
+    // In animated mode exactly one copy is visible at a time. The near copy
+    // shows for the first half of the orbit (the near side) and the far copy
+    // for the second half, so the planet and its label always switch layers
+    // together and are never cut in two.
+    const swap = (side) =>
+      animate
+        ? `<animate attributeName="visibility" values="${side === "near" ? "visible;hidden" : "hidden;visible"}" keyTimes="0;0.5" calcMode="discrete" dur="${duration}s" begin="${begin}s" repeatCount="indefinite"/>`
+        : "";
+    const body = (side) => `<g${place}>${motion}${swap(side)}<g${staticScale}>${scale}
   <ellipse cx="0" cy="${r1(radius + 7)}" rx="${r1(radius * 1.15)}" ry="${r1(radius * 0.28)}" fill="#000" opacity=".3" filter="url(#soft4)"/>
   ${sphere.svg}
 </g></g>`;
 
-    // Labels sit above everything so they stay readable when the planet is
-    // behind the terrain; they dim on the far side instead of being cut off.
-    const fade = (n) => r1((n >= 0 ? 1 : 1 + 0.5 * n) * 100) / 100;
-    const fadeAnim = animate
-      ? `<animate attributeName="opacity" values="${scales.map((_, k) => fade(Math.sin((2 * Math.PI * k) / samples))).join(";")}" dur="${duration}s" begin="${begin}s" repeatCount="indefinite"/>`
-      : "";
-    const label = `<g${place}>${motion}<g${staticScale}>${scale}<text y="${r1(-radius - 11)}" text-anchor="middle" font-size="12" font-weight="600" fill="${t.ink}" paint-order="stroke" stroke="${t.bgOuter}" stroke-width="3" stroke-linejoin="round"${animate ? "" : ` opacity="${fade(near)}"`}>${fadeAnim}${name}${starsLabel}</text></g></g>`;
-    return { body, label, near };
+    let labelLayer;
+    if (animate) {
+      const N = 72;
+      const at = orbitWalker(R, R * RING_FLATTEN);
+      const states = Array.from({ length: N }, (_, k) => {
+        const f = k / N, p = at(f);
+        return shown(p.x, p.y, 1 + 0.18 * Math.sin(2 * Math.PI * f), f < 0.5) ? "visible" : "hidden";
+      });
+      const values = [], times = [];
+      states.forEach((v, k) => { if (k === 0 || v !== states[k - 1]) { values.push(v); times.push(r1((k / N) * 1000) / 1000); } });
+      const vis = values.length > 1
+        ? `<animate attributeName="visibility" values="${values.join(";")}" keyTimes="${times.join(";")}" calcMode="discrete" dur="${duration}s" begin="${begin}s" repeatCount="indefinite"/>`
+        : "";
+      labelLayer = values.length === 1 && values[0] === "hidden"
+        ? ""
+        : `<g>${motion}${vis}<g>${scale}${label}</g></g>`;
+    } else {
+      const x = CX + R * Math.cos(angle), y = CY + R * RING_FLATTEN * near;
+      labelLayer = shown(x, y, 1 + 0.18 * near, near >= 0) ? `<g${place}><g${staticScale}>${label}</g></g>` : "";
+    }
+
+    return { body, near, labelLayer };
   };
 
   const defs = [];
   const bodies = repos.map(planet);
-  const layer = (clip, pick) =>
-    animate
-      ? `<g clip-path="url(#${clip})">${bodies.map((b) => b.body).join("\n")}</g>`
-      : bodies.filter(pick).map((b) => b.body).join("\n");
+  const layer = (side, pick) =>
+    `<g id="${side}Planets">` +
+    (animate ? bodies : bodies.filter(pick)).map((b) => b.body(side)).join("\n") +
+    `</g>`;
 
   return {
-    back: RINGS.map((R, i) => ringPath(R, i, 1)).join("") + layer("farSide", (b) => b.near < 0),
-    front: RINGS.map((R, i) => ringPath(R, i, 0)).join("") + layer("nearSide", (b) => b.near >= 0),
-    labels: bodies.map((b) => b.label).join("\n"),
+    back: RINGS.map((R, i) => ringPath(R, i, 1)).join("") + layer("far", (b) => b.near < 0),
+    front: RINGS.map((R, i) => ringPath(R, i, 0)).join("") + layer("near", (b) => b.near >= 0),
+    labels: `<g id="planetLabels">${bodies.map((b) => b.labelLayer).join("\n")}</g>`,
     defs: defs.join("\n"),
   };
 }
@@ -385,7 +487,7 @@ function panel(data, stats, t) {
   const [lx, ly] = last.split(",");
 
   return `<g>
-  <rect x="${x}" y="${y}" width="${w}" height="${h}" rx="22" fill="url(#glassFill)" stroke="url(#glassEdge)"/>
+  <rect x="${x}" y="${y}" width="${w}" height="${h}" rx="22" fill="url(#glassFill)" stroke="url(#glassEdge)" stroke-width="${t.neonFrame ? 2 : 1}"${t.neonFrame ? ` filter="url(#neon)"` : ""}/>
   <rect x="${x + 28}" y="${y + 26}" width="18" height="3" rx="1.5" fill="${t.glow}"/>
   <text x="${x + 52}" y="${y + 31}" font-size="9.5" font-weight="700" letter-spacing="1.6" fill="${t.glow}">CONTRIBUTION OBSERVATORY</text>
   <text x="${x + w - 28}" y="${y + 31}" text-anchor="end" font-size="10.5" fill="${t.mute}" opacity=".8">Updated ${esc(data.generatedAt)}</text>
@@ -411,7 +513,7 @@ function legend(stats, t) {
     const p = makeProjector({ yawDeg: YAW, pitchDeg: PITCH, cx: x + 42 + i * 26, cy: y + 72 });
     const size = 12;
     if (i === 0) {
-      ramp += poly([p(-size / 2, -size / 2), p(size / 2, -size / 2), p(size / 2, size / 2), p(-size / 2, size / 2)], color, ` stroke="${t.cellEdge}" stroke-width=".6"`);
+      ramp += poly([p(-size / 2, -size / 2), p(size / 2, -size / 2), p(size / 2, size / 2), p(-size / 2, size / 2)], color, ` stroke="${t.cellEdge}" stroke-width="${t.dark ? ".6" : "1.2"}"`);
       return;
     }
     for (const face of prismFaces(p, -size / 2, -size / 2, size, i * 9)) {
@@ -426,7 +528,7 @@ function legend(stats, t) {
     : `<text x="${px}" y="${y + 70}" font-size="12" fill="${t.mute}">No activity yet</text>`;
 
   return `<g>
-  <rect x="${x}" y="${y}" width="${w}" height="${h}" rx="18" fill="url(#glassFill)" stroke="url(#glassEdge)"/>
+  <rect x="${x}" y="${y}" width="${w}" height="${h}" rx="18" fill="url(#glassFill)" stroke="url(#glassEdge)" stroke-width="${t.neonFrame ? 2 : 1}"${t.neonFrame ? ` filter="url(#neon)"` : ""}/>
   <text x="${x + 28}" y="${y + 28}" font-size="11" fill="${t.mute}">Daily intensity</text>
   ${ramp}
   <text x="${x + 28}" y="${y + 96}" font-size="10" fill="${t.mute}" opacity=".8">less</text>
@@ -445,8 +547,8 @@ export function renderSvg(data, { theme = "aurora", animate = true } = {}) {
 
   const stats = computeStats(data.weeks);
   const project = makeProjector({ yawDeg: YAW, pitchDeg: PITCH, cx: CX, cy: CY });
-  const { plate, bars, months, peakTop } = terrain(data, stats, t, project);
-  const orbit = orbits(data, t, animate);
+  const { plate, bars, months, peakTop, blockers } = terrain(data, stats, t, project, animate);
+  const orbit = orbits(data, t, animate, blockers);
   const label = `${data.name}: ${stats.total} contributions, longest streak ${stats.longest} days`;
   const desc =
     `3D contribution terrain for @${data.login}: ${stats.total} contributions over ${stats.activeDays} active days, ` +
@@ -462,19 +564,17 @@ export function renderSvg(data, { theme = "aurora", animate = true } = {}) {
   <radialGradient id="nebB"><stop offset="0" stop-color="${t.nebulaB}" stop-opacity="${t.dark ? 0.22 : 0.55}"/><stop offset="1" stop-color="${t.nebulaB}" stop-opacity="0"/></radialGradient>
   <radialGradient id="gridFade" cx="50%" cy="58%" r="52%"><stop offset="0" stop-color="#fff"/><stop offset=".55" stop-color="#fff" stop-opacity=".5"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient>
   <mask id="gridMask"><rect width="${W}" height="${H}" fill="url(#gridFade)"/></mask>
-  <linearGradient id="glassFill" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#fff" stop-opacity="${t.dark ? 0.09 : 0.85}"/><stop offset="1" stop-color="#fff" stop-opacity="${t.dark ? 0.03 : 0.45}"/></linearGradient>
-  <linearGradient id="glassEdge" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${t.dark ? "#fff" : t.plateEdge}" stop-opacity=".35"/><stop offset="1" stop-color="${t.ring}" stop-opacity=".35"/></linearGradient>
+  <linearGradient id="glassFill" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#fff" stop-opacity="${t.dark ? 0.09 : 1}"/><stop offset="1" stop-color="#fff" stop-opacity="${t.dark ? 0.03 : 0.97}"/></linearGradient>
+  <linearGradient id="glassEdge" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${t.borderA}" stop-opacity="${t.dark ? 0.35 : 0.9}"/><stop offset="1" stop-color="${t.borderB}" stop-opacity="${t.dark ? 0.35 : 0.9}"/></linearGradient>
   <linearGradient id="sparkFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${t.glow}" stop-opacity=".35"/><stop offset="1" stop-color="${t.glow}" stop-opacity="0"/></linearGradient>
-  <linearGradient id="plateFill" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${adjust(t.plateTop, 0.85)}"/><stop offset="1" stop-color="${adjust(t.plateTop, 1.08)}"/></linearGradient>
-  <linearGradient id="rimFade" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="${t.glow}" stop-opacity=".9"/><stop offset=".6" stop-color="${t.glow}" stop-opacity=".45"/><stop offset="1" stop-color="${t.glow}" stop-opacity=".1"/></linearGradient>
+  <linearGradient id="plateFill" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${t.dark ? adjust(t.plateTop, 0.85) : t.plateTop}"/><stop offset="1" stop-color="${t.dark ? adjust(t.plateTop, 1.08) : t.plateTop}"/></linearGradient>
   <linearGradient id="ringFade" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="${t.ring}" stop-opacity=".4"/><stop offset=".5" stop-color="${t.ring}" stop-opacity=".95"/><stop offset="1" stop-color="${t.ring}" stop-opacity=".4"/></linearGradient>
   <linearGradient id="plTerm" x1=".15" y1=".1" x2=".95" y2=".95"><stop offset="0" stop-color="#000" stop-opacity="0"/><stop offset=".5" stop-color="#000" stop-opacity="0"/><stop offset=".8" stop-color="#000" stop-opacity=".35"/><stop offset="1" stop-color="#000" stop-opacity=".7"/></linearGradient>
   <radialGradient id="plSpec"><stop offset="0" stop-color="#fff" stop-opacity=".95"/><stop offset=".5" stop-color="#fff" stop-opacity=".35"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient>
   <filter id="soft4" x="-50%" y="-200%" width="200%" height="500%"><feGaussianBlur stdDeviation="3"/></filter>
   ${orbit.defs}
-  <radialGradient id="floorGlow" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="${t.glow}" stop-opacity="${t.dark ? 0.25 : 0.18}"/><stop offset="1" stop-color="${t.glow}" stop-opacity="0"/></radialGradient>
-  <clipPath id="farSide"><rect width="${W}" height="${CY}"/></clipPath>
-  <clipPath id="nearSide"><rect y="${CY}" width="${W}" height="${H - CY}"/></clipPath>
+  <radialGradient id="floorGlow" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="${t.glow}" stop-opacity="${t.dark ? 0.25 : 0.06}"/><stop offset="1" stop-color="${t.glow}" stop-opacity="0"/></radialGradient>
+  <filter id="neon" x="-10%" y="-10%" width="120%" height="120%" filterUnits="objectBoundingBox"><feGaussianBlur in="SourceGraphic" stdDeviation="2.6" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
   <filter id="glow" x="-80%" y="-80%" width="260%" height="260%"><feGaussianBlur stdDeviation="3" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
   <filter id="soft" x="-20%" y="-60%" width="140%" height="220%"><feGaussianBlur stdDeviation="12"/></filter>
 </defs>
