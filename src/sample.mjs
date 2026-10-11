@@ -23,11 +23,18 @@ export function sampleData() {
     weeks.push(week);
   }
 
+  const total = weeks.flat().reduce((s, d) => s + d.count, 0);
   return {
     name: "Ada Example",
     login: "ada-example",
     generatedAt: "2026-10-01",
     weeks,
+    mix: {
+      commits: Math.round(total * 0.68),
+      pullRequests: Math.round(total * 0.14),
+      issues: Math.round(total * 0.06),
+      reviews: Math.round(total * 0.09),
+    },
     repos: [
       { name: "infra-modules", stars: 14, color: "#844fba" },
       { name: "pipeline-kit", stars: 9, color: "#4298b8" },

@@ -4,11 +4,24 @@
   <strong>Turn GitHub activity into a living 3D contribution universe.</strong>
 </p>
 
-Git3D Universe generates a self-contained SVG that visualizes a GitHub contribution calendar as a 3D isometric terrain with repository planets, profile telemetry, and activity statistics. It can be used locally as a Node.js CLI or directly as a reusable GitHub Action.
+<picture>
+  <source media="(prefers-color-scheme: light)" srcset="./preview-light.svg">
+  <img alt="Git3D Universe: a year of contributions as a 3D pie of month wedges round a glowing core, with top repositories orbiting as planets and a small pie of the contribution mix" src="./preview-dark.svg">
+</picture>
+
+Git3D Universe turns your GitHub year into a small solar system, drawn as one self-contained SVG:
+
+- **The year as a 3D pie:** one wedge per month, read clockwise like a clock face. Each wedge rises with that month's contributions and carries its name, and the busiest month is outlined in gold with its total.
+- **A glowing core** sits in the middle of the ring.
+- **Planets:** your top repositories orbit the pie, passing behind it and in front of it, sized by stars.
+- **Contribution mix:** a small upright 3D pie in the top-left shows how your year splits between commits, pull requests, issues and code review, with each share labelled beside its slice.
+- **Night and day:** `aurora` is deep space and `daylight` a soft dawn sky, with the same cosmic colour wheel.
+
+It can be used locally as a Node.js CLI or directly as a reusable GitHub Action.
 
 ## GitHub Marketplace
 
-Git3D Universe is published as a reusable GitHub Action. The stable release is `v1.3.1`.
+Git3D Universe is published as a reusable GitHub Action. The stable release is `v2.0.0`.
 
 Use the reviewed release tag or an immutable commit SHA in consuming workflows rather than tracking `main`.
 
@@ -24,7 +37,7 @@ Create this file in your profile repository:
 
 The workflow refreshes the SVG once per hour, chooses a light or dark theme from your local timezone, validates the generated SVG, and commits it back to the repository.
 
-For production, use the stable release tag `v1.3.1` or an immutable commit SHA.
+For production, use the stable release tag `v2.0.0` or an immutable commit SHA.
 
 ```yaml
 # Copy this file into:
@@ -108,7 +121,7 @@ jobs:
           echo "mode=${MODE}" >> "$GITHUB_OUTPUT"
 
       - name: Generate Git3D Universe
-        uses: SandeepKomal/Git3D-Universe@v1.3.1
+        uses: SandeepKomal/Git3D-Universe@v2.0.0
         with:
           username: ${{ github.repository_owner }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -220,8 +233,8 @@ Options:
 
 ## Themes
 
-- `aurora` — dark Git3D Universe theme
-- `daylight` — light Git3D Universe theme
+- `aurora` — deep space: navy night sky, stars, and the cosmic colour wheel (teal, sky, indigo, violet, rose, gold)
+- `daylight` — soft dawn sky with the same colour wheel, a little deeper for a light background
 
 ## Security properties
 
@@ -240,9 +253,10 @@ See [THIRD-PARTY-NOTICES.md](./THIRD-PARTY-NOTICES.md) for external Action/depen
 | `action.yml` | Root GitHub Action metadata and runner wrapper |
 | `src/cli.mjs` | Command-line entrypoint |
 | `src/stats.mjs` | Contribution statistics |
-| `src/geometry.mjs` | Isometric projection and prism geometry |
+| `src/geometry.mjs` | 3D projection |
+| `src/pie.mjs` | The 3D month pie, its core and the busiest-month label |
 | `src/themes.mjs` | Theme color tokens |
-| `src/render.mjs` | SVG scene composition |
+| `src/render.mjs` | SVG scene composition: planets, the contribution-mix pie, the legend card |
 | `src/github.mjs` | GitHub GraphQL data retrieval |
 | `src/sample.mjs` | Deterministic sample data |
 | `test/` | Unit and rendering tests |

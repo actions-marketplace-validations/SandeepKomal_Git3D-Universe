@@ -1,13 +1,13 @@
 name: Git3D Universe
 author: Sandeep Komal Pothu
-description: Generate a 3D GitHub contribution visualization as a static SVG for profile READMEs.
+description: Turn your GitHub year into a 3D pie of months with your top repositories orbiting it, as an SVG for profile READMEs.
 
 inputs:
   username:
     description: GitHub username to visualize. Defaults to the current repository owner.
     required: false
   github-token:
-    description: GitHub token used to read the contribution calendar and repository metadata.
+    description: GitHub token used to read the contribution calendar, contribution totals and repository metadata.
     required: true
   theme:
     description: Visualization theme.

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { renderSvg } from "../src/render.mjs";
 import { sampleData } from "../src/sample.mjs";
 import { themes } from "../src/themes.mjs";
+import { monthBuckets } from "../src/pie.mjs";
 
 for (const theme of Object.keys(themes)) {
   test(`renders a clean SVG for theme ${theme}`, () => {
@@ -11,7 +12,8 @@ for (const theme of Object.keys(themes)) {
     assert.ok(svg.trimEnd().endsWith("</svg>"));
     assert.ok(!/NaN|undefined|Infinity/.test(svg), "no invalid numbers or undefined values");
     assert.ok(svg.length < 600_000, "stays comfortably small for a README");
-    assert.match(svg, new RegExp(`stroke="${themes[theme].cellEdge}"`), "terrain uses visible cell edges");
+    const ids = [...svg.matchAll(/ id="([^"]+)"/g)].map((m) => m[1]);
+    assert.equal(new Set(ids).size, ids.length, "every id is unique");
   });
 }
 
@@ -22,6 +24,7 @@ test("output is deterministic", () => {
 test("hostile names and colours cannot inject markup", () => {
   const data = sampleData();
   data.name = `<script>alert(1)</script>"&`;
+  data.login = `x"><img src=x>`;
   data.repos[0].name = `"><img src=x onerror=alert(1)>`;
   data.repos[0].color = `red" onload="alert(1)`;
   const svg = renderSvg(data);
@@ -31,7 +34,7 @@ test("hostile names and colours cannot inject markup", () => {
 });
 
 test("static mode has no animation elements", () => {
-  assert.ok(!renderSvg(sampleData(), { animate: false }).includes("<animateMotion"));
+  assert.ok(!/<animate/.test(renderSvg(sampleData(), { animate: false })));
   assert.ok(renderSvg(sampleData(), { animate: true }).includes("<animateMotion"));
 });
 
@@ -42,34 +45,69 @@ test("unknown theme gives a clear error", () => {
 test("includes an accessible title and description", () => {
   const svg = renderSvg(sampleData());
   assert.match(svg, /<title>Ada Example: \d+ contributions/);
-  assert.match(svg, /<desc>3D contribution terrain for @ada-example/);
+  assert.match(svg, /<desc>3D contribution pie for @ada-example/);
 });
 
-test("labels months along the plate and marks the peak day", () => {
-  const svg = renderSvg(sampleData());
-  for (const m of ["Jan", "Jun", "Sep"]) assert.ok(svg.includes(`>${m}</text>`), `month ${m} labelled`);
-  assert.ok(svg.includes("Jun 3 · 29"), "peak callout uses a short date and the count");
-});
-
-test("animated planets are split into far and near layers around the terrain", () => {
-  const svg = renderSvg(sampleData(), { animate: true });
-  const far = svg.indexOf('id="farPlanets"');
-  const near = svg.indexOf('id="nearPlanets"');
-  const plate = svg.indexOf('fill="url(#plateFill)"');
-  assert.ok(far > 0 && far < plate, "far side is drawn before the terrain");
-  assert.ok(near > plate, "near side is drawn after the terrain");
-});
-
-test("an empty calendar renders without a peak beacon or invalid numbers", () => {
+test("the big pie has one labelled wedge per month and flags the busiest month", () => {
   const data = sampleData();
-  data.weeks = data.weeks.map((w) => w.map((d) => ({ ...d, count: 0 })));
+  const svg = renderSvg(data, { animate: false });
+  const months = monthBuckets(data.weeks);
+  for (const m of months.filter((m) => m.days >= 12)) assert.ok(svg.includes(`>${m.label}</text>`), `${m.label} wedge is labelled`);
+  const peak = months.reduce((a, b) => (b.total > a.total ? b : a));
+  assert.ok(svg.includes(`${peak.label} · ${peak.total.toLocaleString("en-US")}`), "the busiest month carries a label");
+});
+
+test("months are grouped by calendar month with their days and totals", () => {
+  const weeks = [[
+    { date: "2026-01-30", count: 2 }, { date: "2026-01-31", count: 3 },
+    { date: "2026-02-01", count: 4 }, { date: "bad", count: 9 }, { date: "2026-02-02", count: -1 },
+  ]];
+  assert.deepEqual(monthBuckets(weeks).map(({ key, days, total, label }) => ({ key, days, total, label })), [
+    { key: "2026-01", days: 2, total: 5, label: "Jan" },
+    { key: "2026-02", days: 2, total: 4, label: "Feb" },
+  ]);
+});
+
+test("the corner pie shows only commits, pull requests, issues and code review, with shares adding to 100", () => {
+  const data = sampleData();
+  const svg = renderSvg(data, { animate: false });
+  const shares = [...svg.matchAll(/font-weight="700">(\d+)%<\/tspan> (Commits|Pull requests|Issues|Code review)</g)];
+  assert.deepEqual(shares.map((m) => m[2]).sort(), ["Code review", "Commits", "Issues", "Pull requests"]);
+  assert.equal(shares.reduce((s, m) => s + Number(m[1]), 0), 100);
+  assert.ok(!svg.includes("% Other") && !svg.includes("</tspan> Other<"), "no Other slice");
+  assert.ok(svg.includes('mask="url(#mixHole)"'), "the upright pie keeps a clear hole");
+});
+
+test("odd or missing mix values cannot break the corner pie", () => {
+  const data = sampleData();
+  data.mix = { commits: "12", pullRequests: -4, issues: null, reviews: "x" };
   const svg = renderSvg(data);
   assert.ok(!/NaN|undefined|Infinity/.test(svg));
-  assert.ok(!svg.includes('id="beam"'));
+  assert.ok(svg.includes(">100%</tspan> Commits<"));
+  delete data.mix;
+  assert.ok(renderSvg(data).includes("No activity yet"), "no mix data reads as no activity");
+});
+
+test("an empty calendar renders without a month label or invalid numbers", () => {
+  const data = sampleData();
+  data.weeks = data.weeks.map((w) => w.map((d) => ({ ...d, count: 0 })));
+  data.mix = { commits: 0, pullRequests: 0, issues: 0, reviews: 0 };
+  const svg = renderSvg(data);
+  assert.ok(!/NaN|undefined|Infinity/.test(svg));
+  assert.ok(!svg.includes(" · 0<"), "no busiest-month label");
   assert.ok(svg.includes("No activity yet"));
 });
 
-test("planets are lit spheres coloured from the theme's neon palette", () => {
+test("animated planets are split into far and near layers around the pie", () => {
+  const svg = renderSvg(sampleData(), { animate: true });
+  const far = svg.indexOf('id="farPlanets"');
+  const near = svg.indexOf('id="nearPlanets"');
+  const disc = svg.indexOf('fill="url(#discTop)"');
+  assert.ok(far > 0 && far < disc, "far side is drawn before the pie");
+  assert.ok(near > disc, "near side is drawn after the pie");
+});
+
+test("planets are lit spheres coloured from the theme's planet palette", () => {
   const data = sampleData();
   const svg = renderSvg(data, { theme: "aurora" });
   assert.ok(svg.includes('id="pl0b"') && svg.includes('id="pl0c"'), "per-planet gradient and clip");
@@ -90,73 +128,41 @@ test("unexpected repo values cannot break the geometry or the render", () => {
   assert.ok(!svg.includes("onload"));
 });
 
-test("planet names show in clear sky on both sides of the orbit, never over the terrain", () => {
+test("planet names sit above the planets and are only hidden on the far side", () => {
   const data = sampleData();
   const svg = renderSvg(data, { animate: true });
   const layer = svg.slice(svg.indexOf('id="planetLabels"'));
   assert.ok(svg.indexOf('id="planetLabels"') > svg.indexOf('id="nearPlanets"'), "names sit above the planets");
   assert.equal([...layer.matchAll(/>infra-modules</g)].length, 1, "one name per planet");
-  const anims = [...layer.matchAll(/attributeName="visibility" values="([^"]+)" keyTimes="([^"]+)"/g)];
-  assert.ok(anims.length > 0, "names switch visibility as planets pass the terrain");
-  for (const [, values, times] of anims) {
-    assert.equal(values.split(";")[0], "visible", "every name starts visible on the near side");
+  for (const [, values, times] of layer.matchAll(/attributeName="visibility" values="([^"]+)" keyTimes="([^"]+)"/g)) {
     const v = values.split(";"), k = times.split(";").map(Number);
+    assert.equal(v[0], "visible", "every name starts visible on the near side");
     const firstHidden = k[v.indexOf("hidden")];
     assert.ok(firstHidden === undefined || firstHidden >= 0.5, "names are only hidden on the far side");
   }
-  const farVisible = anims.some(([, values, times]) => values.split(";").some((v, i) => v === "visible" && Number(times.split(";")[i]) >= 0.5)) ||
-    anims.length < data.repos.length;
-  assert.ok(farVisible, "at least one name stays visible on part of the far side");
 });
 
-test("night theme outlines bar tops in a lighter tint of their own colour", () => {
-  const svg = renderSvg(sampleData(), { theme: "aurora", animate: false });
-  assert.ok(themes.aurora.neonEdges);
-  assert.ok(!svg.includes(`stroke="${themes.aurora.cellEdge}" stroke-width=".6" stroke-opacity=".62"`), "bar tops no longer use the flat cell edge");
-  assert.match(svg, /stroke-width="1" stroke-opacity="\.95"/);
-});
-
-test("each planet switches depth layers as a whole, so labels are never cut in two", () => {
+test("each planet switches depth layers as a whole", () => {
   const svg = renderSvg(sampleData(), { animate: true });
-  assert.ok(!svg.includes("clip-path=\"url(#farSide)\"") && !svg.includes("clip-path=\"url(#nearSide)\""), "no half-scene clipping");
   const n = sampleData().repos.length;
   assert.equal(svg.split('values="visible;hidden" keyTimes="0;0.5" calcMode="discrete"').length - 1, n, "near copies show on the near half");
   assert.equal(svg.split('values="hidden;visible" keyTimes="0;0.5" calcMode="discrete"').length - 1, n, "far copies show on the far half");
 });
 
-test("day theme is clean white with pink and green borders", () => {
-  const t = themes.daylight;
-  assert.deepEqual([t.bgInner, t.bgMid, t.bgOuter, t.plateTop], ["#ffffff", "#ffffff", "#ffffff", "#ffffff"]);
-  const svg = renderSvg(sampleData(), { theme: "daylight", animate: false });
-  assert.match(svg, new RegExp(`id="glassEdge"[^>]*><stop offset="0" stop-color="${t.borderA}"[^>]*/><stop offset="1" stop-color="${t.borderB}"`));
-  assert.match(svg, new RegExp(`fill="url\\(#plateFill\\)" stroke="${t.plateEdge}"`));
+test("the bottom-right card keeps the month colours and the peak day; there is no top-left card", () => {
+  const svg = renderSvg(sampleData(), { animate: false });
+  assert.ok(svg.includes(">Month wedges<") && svg.includes(">Peak day<") && svg.includes(">Jun 3<"));
+  assert.ok(!svg.includes("CONTRIBUTION OBSERVATORY") && !svg.includes("longest streak<"), "no top-left card or headline numbers");
 });
 
-test("a colour wave rolls across the grid in animated mode only", () => {
-  const data = sampleData();
-  for (const theme of ["aurora", "daylight"]) {
-    const t = themes[theme];
-    const svg = renderSvg(data, { theme, animate: true });
-    const strips = svg.split(`values="${t.wave.join(";")}" calcMode="discrete"`).length - 1;
-    assert.equal(strips, data.weeks.length, `${theme}: one wave strip per week`);
-    assert.ok(svg.indexOf(`values="${t.wave.join(";")}"`) < svg.indexOf('id="nearPlanets"'), "the wave sits under the near planets");
-    assert.ok(!renderSvg(data, { theme, animate: false }).includes(t.wave.join(";")), `${theme}: static mode has no wave`);
-  }
-});
-
-test("the plate has glowing pink and green neon-tube edges in both themes", () => {
-  for (const theme of ["aurora", "daylight"]) {
-    const t = themes[theme];
-    const svg = renderSvg(sampleData(), { theme, animate: false });
-    for (const c of [t.edgeBack, t.edgeFront]) {
-      assert.match(svg, new RegExp(`stroke="${c}" stroke-width="2.6"[^>]*filter="url\\(#neon\\)"`), `${theme}: ${c} tube`);
-    }
-  }
-  assert.match(renderSvg(sampleData(), { theme: "daylight" }), /stroke="url\(#glassEdge\)" stroke-width="2" filter="url\(#neon\)"/, "day cards glow");
-});
-
-test("day and night themes share one neon palette", () => {
+test("night and day share the year's colour wheel shape and the contribution-mix colours", () => {
   const { aurora: a, daylight: d } = themes;
-  assert.deepEqual(d.ramp.slice(1), a.ramp.slice(1), "activity levels");
-  for (const k of ["peak", "planets", "wave", "edgeBack", "edgeFront", "ring", "glow"]) assert.deepEqual(d[k], a[k], k);
+  assert.equal(a.wheel.length, d.wheel.length);
+  assert.deepEqual(a.mix, d.mix);
+  assert.equal(a.mix.length, 4);
+});
+
+test("profile workflows that check the SVG for the headline stats keep passing", () => {
+  const svg = renderSvg(sampleData());
+  for (const s of ["@ada-example", "contributions", "active days", "current streak", "longest streak"]) assert.ok(svg.includes(s), s);
 });

@@ -2,6 +2,30 @@
 
 All notable changes to Git3D Universe are documented here.
 
+## [2.0.0] - 2026-10-10
+
+A new look of Git3D Universe's own. The 3D grid of bars, the neon edges and the colour wave are gone; they now live on in the separate Neon Arena project.
+
+### The year as a 3D pie
+- The contribution calendar becomes a ring of month wedges standing on a floating disc, read clockwise from the top like a clock face. Each wedge spans its month's share of the year (partial months at either end are thinner), rises with that month's contributions and carries the month's name on its top.
+- The busiest month is outlined in gold, with its name and total in a label floating in clear sky above the pie.
+- A glowing core sits in the middle of the ring.
+- Wedges are cut into narrow segments and painted back to front, with a hairline stroke in each face's own colour so segments join without seams.
+
+### Planets orbit the pie
+- Repository planets now circle the pie, passing behind it on the far side and in front of it on the near side. Far-side names hide only while they would overlap the pie.
+
+### Contribution mix
+- A small upright 3D pie in the top-left, facing the viewer, shows how the year splits between commits, pull requests, issues and code review, as shares of those four (like GitHub's activity overview). Each slice's share and name sit beside it on a short leader line, so the split never relies on colour alone. Its four colours were checked for colour-blind separation in both themes.
+- The GitHub query now also reads `totalCommitContributions`, `totalPullRequestContributions`, `totalIssueContributions` and `totalPullRequestReviewContributions`. No new scopes are needed.
+
+### Cosmic themes
+- `aurora` is deep space (navy sky, stars, indigo and teal nebulas) and `daylight` a soft dawn sky. Both use one cosmic colour wheel for the months: teal, sky, indigo, violet, rose and gold.
+
+### Removed
+- The top-left stats card and its weekly sparkline. The headline numbers remain in the image's accessible title and description, so workflows that check the SVG for them keep passing.
+- The isometric terrain, floor grid, peak-day beacon, neon-tube edges, colour wave and the `ramp`, `wave`, `edgeBack`, `edgeFront`, `neonFrame` and related theme tokens. `prismFaces` is removed from `src/geometry.mjs`.
+
 ## [1.3.1] - 2026-10-09
 
 ### Fixed

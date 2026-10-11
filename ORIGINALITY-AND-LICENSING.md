@@ -22,9 +22,17 @@ No third-party fonts, icons, templates, or image libraries are intentionally bun
 
 ## Visual design provenance
 
-The rendered scene is composed entirely by the project's own code in `src/render.mjs`, `src/geometry.mjs`, and `src/themes.mjs`. That includes the projected terrain and plate, the colour band on empty days, the split-depth orbit layers and their glow, core and highlight lines, the lit 3D planets (gradients, cloud bands, storm spot, terminator, specular glint, atmosphere rim and banded ring), the peak-day beacon, the floor grid, the nebula backdrop, the stats and legend cards, and the prism legend. All colour values are defined in `src/themes.mjs`. No external images, icon sets, fonts, SVG templates, or generated artwork are embedded. The font stack refers only to fonts already installed on the viewer's system.
+The rendered scene is composed entirely by the project's own code in `src/render.mjs`, `src/pie.mjs`, `src/geometry.mjs`, and `src/themes.mjs`. That includes the 3D month pie (segmented wedges, painter's-order depth sort, smooth shading, floating disc and glowing core), the busiest-month label, the small 3D contribution-mix pie and its labels, the split-depth orbit layers and their glow, core and highlight lines, the lit 3D planets (gradients, cloud bands, storm spot, terminator, specular glint, atmosphere rim and banded ring), the nebula backdrop and the legend card. All colour values are defined in `src/themes.mjs`. No external images, icon sets, fonts, SVG templates, or generated artwork are embedded. The font stack refers only to fonts already installed on the viewer's system.
 
 ## Release review
+
+### v2.0.0 (2026-10-10)
+
+- **Third-party code:** none added. The pie geometry and the contribution-mix chart are original code in `src/pie.mjs` and `src/render.mjs`.
+- **Assets:** no images, icon sets, fonts, SVG templates or generated artwork added. The preview SVGs are produced by the project's own renderer from built-in sample data.
+- **Dependencies:** still none at runtime or for development.
+- **Data:** the GraphQL query adds four public contribution totals (commits, pull requests, issues, code review) from the same `contributionsCollection`; no new scopes or endpoints.
+- **Design references:** GitHub's own profile activity overview shows the same four contribution kinds as a radar chart; this project draws them as its own 3D pie. Nothing was copied from GitHub's implementation or from other contribution visualizers.
 
 ### v1.1.0 (2026-10-08)
 

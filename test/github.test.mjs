@@ -19,6 +19,10 @@ test("maps the GraphQL payload into our data shape", async () => {
         name: null,
         login: "octocat",
         contributionsCollection: {
+          totalCommitContributions: 70,
+          totalPullRequestContributions: 15,
+          totalIssueContributions: "6",
+          totalPullRequestReviewContributions: null,
           contributionCalendar: { weeks: [{ contributionDays: [{ date: "2026-01-01", contributionCount: 4 }] }] },
         },
         repositories: { nodes: [{ name: "r", stargazerCount: 3, primaryLanguage: null }] },
@@ -29,6 +33,7 @@ test("maps the GraphQL payload into our data shape", async () => {
   assert.equal(data.name, "octocat");
   assert.deepEqual(data.weeks[0][0], { date: "2026-01-01", count: 4 });
   assert.equal(data.repos[0].color, null);
+  assert.deepEqual(data.mix, { commits: 70, pullRequests: 15, issues: 6, reviews: 0 }, "contribution mix by kind, with odd values made safe");
 });
 
 test("surfaces API errors", async () => {

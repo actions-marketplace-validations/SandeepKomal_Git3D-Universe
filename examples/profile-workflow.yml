@@ -82,7 +82,7 @@ jobs:
           echo "local_time=${LOCAL_DATE}" >> "$GITHUB_OUTPUT"
 
       - name: Generate Git3D Universe
-        uses: SandeepKomal/Git3D-Universe@v1.3.1
+        uses: SandeepKomal/Git3D-Universe@v2.0.0
         with:
           username: ${{ github.repository_owner }}
           github-token: ${{ secrets.GITHUB_TOKEN }}

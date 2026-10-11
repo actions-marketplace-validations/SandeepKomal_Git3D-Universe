@@ -9,6 +9,10 @@ query ($login: String!) {
     name
     login
     contributionsCollection {
+      totalCommitContributions
+      totalPullRequestContributions
+      totalIssueContributions
+      totalPullRequestReviewContributions
       contributionCalendar {
         weeks { contributionDays { date contributionCount } }
       }
@@ -41,11 +45,20 @@ export async function fetchProfile(login, token, fetchImpl = fetch) {
   const user = body.data?.user;
   if (!user) throw new Error(`User "${login}" was not found.`);
 
+  const c = user.contributionsCollection;
+  const n = (v) => Math.max(0, Math.floor(Number(v)) || 0);
   return {
     name: user.name || user.login,
     login: user.login,
     generatedAt: new Date().toISOString().slice(0, 10),
-    weeks: user.contributionsCollection.contributionCalendar.weeks.map((w) =>
+    // How the year's contributions split by type.
+    mix: {
+      commits: n(c.totalCommitContributions),
+      pullRequests: n(c.totalPullRequestContributions),
+      issues: n(c.totalIssueContributions),
+      reviews: n(c.totalPullRequestReviewContributions),
+    },
+    weeks: c.contributionCalendar.weeks.map((w) =>
       w.contributionDays.map((d) => ({ date: d.date, count: d.contributionCount }))
     ),
     repos: user.repositories.nodes.map((r) => ({

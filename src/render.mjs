@@ -1,22 +1,13 @@
-import { computeStats, levelByRank } from "./stats.mjs";
-import { makeProjector, prismFaces } from "./geometry.mjs";
+import { computeStats } from "./stats.mjs";
+import { makeProjector } from "./geometry.mjs";
 import { themes, FONT_STACK } from "./themes.mjs";
+import { pie } from "./pie.mjs";
 
-// The terrain is the hero: it runs corner to corner, rising from bottom-left
-// to top-right, and the cards sit in the two empty corners it leaves.
+// The year is the hero: a 3D pie of month wedges round a glowing core, with
+// the top repositories orbiting it as planets. The card sits in the top-left
+// corner the scene leaves free.
 const W = 1280;
 const H = 760;
-const CX = 640;
-const CY = 452;
-const CELL = 22;
-const GAP = 3.4;
-const YAW = -24;
-const PITCH = 50;
-const PLATE_PAD = 14;
-const PLATE_DEPTH = 30; // world units below the ground plane
-const MAX_BAR = 290; // world height of the busiest day
-
-const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 const esc = (s) =>
   String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&apos;" }[c]));
@@ -35,15 +26,7 @@ function mix(a, b, k) {
   return "#" + ca.map((v, i) => Math.round(v + (cb[i] - v) * k).toString(16).padStart(2, "0")).join("");
 }
 
-// Colour of the floor band at position f (0..1) through the year.
-function floorAt(stops, f) {
-  const x = Math.max(0, Math.min(1, f)) * (stops.length - 1);
-  const i = Math.min(stops.length - 2, Math.floor(x));
-  return mix(stops[i], stops[i + 1], x - i);
-}
-
-const pts = (list) => list.map((p) => `${r1(p.x)},${r1(p.y)}`).join(" ");
-const poly = (list, fill, extra = "") => `<polygon points="${pts(list)}" fill="${fill}"${extra}/>`;
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 // "2026-06-03" -> "Jun 3"
 function shortDate(iso) {
@@ -81,162 +64,6 @@ function nebula() {
   return `<ellipse cx="${W * 0.8}" cy="${H * 0.2}" rx="420" ry="220" fill="url(#nebA)"/><ellipse cx="${W * 0.28}" cy="${H * 0.82}" rx="460" ry="200" fill="url(#nebB)"/>`;
 }
 
-// A ground-plane grid around the plate, faded out radially by a mask.
-function floorGrid(data, project, t) {
-  const halfU = (data.weeks.length * CELL) / 2 + 260;
-  const halfV = (7 * CELL) / 2 + 300;
-  const step = CELL * 2;
-  const h = -PLATE_DEPTH;
-  let lines = "";
-  for (let u = -Math.floor(halfU / step) * step; u <= halfU; u += step) {
-    const a = project(u, -halfV, h), b = project(u, halfV, h);
-    lines += `M${r1(a.x)},${r1(a.y)}L${r1(b.x)},${r1(b.y)}`;
-  }
-  for (let v = -Math.floor(halfV / step) * step; v <= halfV; v += step) {
-    const a = project(-halfU, v, h), b = project(halfU, v, h);
-    lines += `M${r1(a.x)},${r1(a.y)}L${r1(b.x)},${r1(b.y)}`;
-  }
-  return `<path d="${lines}" fill="none" stroke="${t.grid}" stroke-width=".6" opacity="${t.dark ? ".55" : ".5"}" mask="url(#gridMask)"/>`;
-}
-
-// Colour levels follow the spread of active days (quartiles), so one huge day
-// does not flatten every other day into the lowest colour.
-function rankThresholds(weeks) {
-  const counts = weeks.flat().map((d) => d.count).filter((c) => c > 0).sort((a, b) => a - b);
-  const at = (q) => counts[Math.min(counts.length - 1, Math.floor(q * counts.length))] ?? 0;
-  return [at(0.25), at(0.5), at(0.75)];
-}
-
-function terrain(data, stats, t, project, animate) {
-  const weekCount = data.weeks.length;
-  const u0 = (-weekCount * CELL) / 2;
-  const v0 = (-7 * CELL) / 2;
-
-  const cells = [];
-  data.weeks.forEach((week, i) =>
-    week.forEach((day, j) => {
-      const u = u0 + i * CELL + GAP / 2;
-      const v = v0 + j * CELL + GAP / 2;
-      cells.push({ u, v, day, week: i, row: j, depth: project(u, v, 0).depth });
-    })
-  );
-  cells.sort((a, b) => a.depth - b.depth);
-
-  const size = CELL - GAP;
-  const thresholds = rankThresholds(data.weeks);
-  const heightOf = (count) => 6 + Math.pow(count / stats.max, 0.6) * MAX_BAR;
-  let floor = "";
-  let svg = "";
-  const barBoxes = [];
-  let peakTop = null;
-  const jitter = lcg(7);
-  for (const { u, v, day, week, row } of cells) {
-    const isPeak = stats.peak.date === day.date && day.count > 0;
-    const base = isPeak ? t.peak : t.ramp[levelByRank(day.count, thresholds)];
-    if (day.count === 0) {
-      // Empty days take the floor band, with a little per-cell variation for texture.
-      const band = floorAt(t.floor, (week + row / 7) / Math.max(1, weekCount - 1));
-      floor += poly(
-        [project(u, v), project(u + size, v), project(u + size, v + size), project(u, v + size)],
-        t.dark ? adjust(band, 0.9 + jitter() * 0.2) : band,
-        ` opacity="${t.dark ? ".9" : "1"}" stroke="${t.cellEdge}" stroke-width="${t.dark ? ".6" : "1.2"}" stroke-opacity="${t.dark ? ".7" : "1"}"`
-      );
-      continue;
-    }
-    const height = heightOf(day.count);
-    const faces = prismFaces(project, u, v, size, height);
-    const xs = faces.flatMap((f) => f.pts.map((q) => q.x)), ys = faces.flatMap((f) => f.pts.map((q) => q.y));
-    barBoxes.push({ x0: Math.min(...xs), y0: Math.min(...ys), x1: Math.max(...xs), y1: Math.max(...ys) });
-    for (const face of faces) {
-      const edge = !face.top
-        ? ""
-        : t.neonEdges
-          ? ` stroke="${t.dark ? mix(base, "#ffffff", 0.45) : adjust(base, 0.82)}" stroke-width="1" stroke-opacity=".95"`
-          : ` stroke="${t.cellEdge}" stroke-width=".6" stroke-opacity=".62"`;
-      const glow = face.top && isPeak ? ` filter="url(#glow)"` : "";
-      svg += poly(face.pts, adjust(base, face.shade), `${edge}${glow}`);
-    }
-    if (isPeak) peakTop = project(u + size / 2, v + size / 2, height);
-  }
-
-  // The plate is a slab under the calendar; only faces turned toward the viewer are drawn.
-  const U0 = u0 - PLATE_PAD, U1 = -u0 + PLATE_PAD, V0 = v0 - PLATE_PAD, V1 = -v0 + PLATE_PAD;
-  const corner = (u, v, h = 0) => project(u, v, h);
-  const top = [corner(U0, V0), corner(U1, V0), corner(U1, V1), corner(U0, V1)];
-  const bottom = [corner(U0, V0, -PLATE_DEPTH), corner(U1, V0, -PLATE_DEPTH), corner(U1, V1, -PLATE_DEPTH), corner(U0, V1, -PLATE_DEPTH)];
-  const sides = [
-    { n: [0, 1], i: [3, 2], shade: 1 },
-    { n: [-1, 0], i: [0, 3], shade: 0.8 },
-    { n: [1, 0], i: [2, 1], shade: 0.8 },
-    { n: [0, -1], i: [1, 0], shade: 1 },
-  ]
-    .filter((s) => project.facing(s.n[0], s.n[1]) > 0)
-    .map((s) => poly([top[s.i[0]], top[s.i[1]], bottom[s.i[1]], bottom[s.i[0]]], adjust(t.plateSide, s.shade)))
-    .join("");
-
-  const shadow = `<polygon points="${pts(bottom.map((p) => ({ x: p.x + 6, y: p.y + 22 })))}" fill="${t.shadow}" opacity="${t.dark ? ".75" : ".2"}" filter="url(#soft)"/>`;
-  // Rim light along the two front edges catches the eye and separates plate from floor.
-  // Neon tube edges: a thick glowing core with a soft halo, pink along the
-  // back edges and green along the front edges.
-  const tube = (list, color) =>
-    `<polyline points="${pts(list)}" fill="none" stroke="${color}" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" filter="url(#neon)"/>` +
-    `<polyline points="${pts(list)}" fill="none" stroke="${mix(color, "#ffffff", 0.55)}" stroke-width="0.9" stroke-linecap="round" stroke-linejoin="round"/>`;
-  const rim = tube([top[3], top[0], top[1], top[2]], t.edgeBack) + tube([top[0], top[3], top[2]], t.edgeFront);
-  const plate =
-    shadow +
-    sides +
-    `<polygon points="${pts(top)}" fill="url(#plateFill)" stroke="${t.plateEdge}" stroke-width="1"/>` +
-    rim;
-
-  // Month ticks along the front edge, below the slab.
-  let months = "";
-  let prev = -1;
-  data.weeks.forEach((week, i) => {
-    const m = Number(String(week[0]?.date || "").slice(5, 7));
-    if (!m || m === prev) return;
-    const first = prev === -1;
-    prev = m;
-    if (first && Number(String(week[0].date).slice(8, 10)) > 14) return; // partial leading month
-    const a = project(u0 + i * CELL, V1, -PLATE_DEPTH);
-    months += `<line x1="${r1(a.x)}" y1="${r1(a.y + 4)}" x2="${r1(a.x)}" y2="${r1(a.y + 10)}" stroke="${t.mute}" stroke-opacity=".6"/><text x="${r1(a.x)}" y="${r1(a.y + 24)}" text-anchor="middle" font-size="12" letter-spacing=".4" fill="${t.mute}">${MONTHS[m - 1]}</text>`;
-  });
-
-  // A colour wave rolls across the year: one soft strip per week fades in and
-  // out in turn, between the floor and the bars, so bars stay solid in front.
-  // Each pass takes the next colour in the theme's wave palette.
-  let wave = "";
-  if (animate && t.wave) {
-    const period = 7;
-    const travel = 4;
-    data.weeks.forEach((_, i) => {
-      const a = u0 + i * CELL, b = a + CELL;
-      const begin = r1((i / weekCount) * travel);
-      wave += `<polygon points="${pts([project(a, v0), project(b, v0), project(b, -v0), project(a, -v0)])}" fill="${t.wave[0]}" opacity="0">` +
-        `<animate attributeName="opacity" values="0;${t.waveOpacity};0;0" keyTimes="0;0.07;0.2;1" dur="${period}s" begin="${begin}s" repeatCount="indefinite"/>` +
-        `<animate attributeName="fill" values="${t.wave.join(";")}" calcMode="discrete" dur="${period * t.wave.length}s" begin="${begin}s" repeatCount="indefinite"/>` +
-        `</polygon>`;
-    });
-  }
-
-  return { plate, bars: floor + wave + svg, months, peakTop, blockers: { plate: top, boxes: barBoxes } };
-}
-
-// A light beam rising from the busiest day, with a callout at its tip.
-function beacon(peakTop, stats, t) {
-  if (!peakTop) return "";
-  const x = r1(peakTop.x), y0 = r1(peakTop.y - 2), y1 = r1(Math.max(44, peakTop.y - 64));
-  const label = `${shortDate(stats.peak.date)} · ${stats.max}`;
-  const w = 26 + label.length * 6.4;
-  return `<g>
-  <linearGradient id="beam" gradientUnits="userSpaceOnUse" x1="0" y1="${y0}" x2="0" y2="${y1}"><stop offset="0" stop-color="${t.peak}" stop-opacity=".95"/><stop offset="1" stop-color="${t.peak}" stop-opacity="0"/></linearGradient>
-  <line x1="${x}" y1="${y0}" x2="${x}" y2="${y1}" stroke="url(#beam)" stroke-width="7" opacity=".25"/>
-  <line x1="${x}" y1="${y0}" x2="${x}" y2="${y1}" stroke="url(#beam)" stroke-width="1.5"/>
-  <rect x="${r1(x - 11)}" y="${r1(y1 - 22)}" width="${r1(w)}" height="20" rx="10" fill="${t.bgOuter}" fill-opacity=".72" stroke="${t.peak}" stroke-opacity=".55"/>
-  <circle cx="${x}" cy="${r1(y1 - 12)}" r="3" fill="${t.peak}"/>
-  <text x="${r1(x + 8)}" y="${r1(y1 - 8)}" font-size="11" font-weight="600" fill="${t.ink}">${esc(label)}</text>
-</g>`;
-}
-
 function hashName(name) {
   let h = 2166136261;
   for (const ch of String(name)) h = Math.imul(h ^ ch.charCodeAt(0), 16777619);
@@ -256,7 +83,7 @@ function planetSphere(i, r, color, seed, ringed, animate, t) {
     `<stop offset=".62" stop-color="${color}"/><stop offset=".88" stop-color="${adjust(color, 0.42)}"/>` +
     `<stop offset="1" stop-color="${adjust(color, 0.2)}"/></radialGradient>` +
     `<radialGradient id="${id}a" r="50%"><stop offset=".7" stop-color="${color}" stop-opacity="0"/>` +
-    `<stop offset=".79" stop-color="${adjust(color, 1.3)}" stop-opacity="${t.neonEdges ? 0.7 : 0.38}"/><stop offset=".88" stop-color="${color}" stop-opacity="${t.neonEdges ? 0.28 : 0.1}"/>` +
+    `<stop offset=".79" stop-color="${adjust(color, 1.3)}" stop-opacity=".38"/><stop offset=".88" stop-color="${color}" stop-opacity=".1"/>` +
     `<stop offset="1" stop-color="${color}" stop-opacity="0"/></radialGradient>` +
     `<clipPath id="${id}c"><circle r="${r1(r)}"/></clipPath>`;
 
@@ -299,13 +126,16 @@ function planetSphere(i, r, color, seed, ringed, animate, t) {
   return { defs, svg };
 }
 
-const RINGS = [440, 515, 590];
-const RING_FLATTEN = 0.2;
+const RINGS = [372, 438, 504];
+const RING_FLATTEN = 0.24;
+// Orbits circle the pie's centre.
+const OCX = 704;
+const OCY = 430;
 
-// Planets orbit in a plane that passes behind the calendar on its far side
-// and in front of it on its near side. Rings are split into a back and a front
+// Planets orbit in a plane that passes behind the pie on its far side and in
+// front of it on its near side. Rings are split into a back and a front
 // arc; each planet is drawn twice, once per layer, clipped to its half, so the
-// animated copies stay in lockstep and the far side is hidden by the terrain.
+// animated copies stay in lockstep and the far side is hidden by the pie.
 // Point on an orbit at a fraction of its length, matching animateMotion's
 // paced timing. The path starts on the left and runs through the near side first.
 function orbitWalker(R, ry) {
@@ -313,7 +143,7 @@ function orbitWalker(R, ry) {
   const pts = [], len = [0];
   for (let k = 0; k <= steps; k++) {
     const th = Math.PI - (2 * Math.PI * k) / steps;
-    pts.push({ x: CX + R * Math.cos(th), y: CY + ry * Math.sin(th) });
+    pts.push({ x: OCX + R * Math.cos(th), y: OCY + ry * Math.sin(th) });
     if (k) len.push(len[k - 1] + Math.hypot(pts[k].x - pts[k - 1].x, pts[k].y - pts[k - 1].y));
   }
   const total = len[steps];
@@ -326,9 +156,9 @@ function orbitWalker(R, ry) {
   };
 }
 
-// True when an axis-aligned box touches the terrain: the plate's top surface
-// (a convex polygon, tested with separating axes) or any bar's bounding box.
-function hitsTerrain(box, blockers) {
+// True when an axis-aligned box touches the pie: its disc (a convex polygon,
+// tested with separating axes) or any slice segment's bounding box.
+function hitsPie(box, blockers) {
   if (!blockers) return false;
   for (const b of blockers.boxes) if (box.x0 < b.x1 && box.x1 > b.x0 && box.y0 < b.y1 && box.y1 > b.y0) return true;
   const poly = blockers.plate;
@@ -345,7 +175,7 @@ function hitsTerrain(box, blockers) {
 }
 
 function orbits(data, t, animate, blockers) {
-  const arc = (R, sweep) => `M${CX - R},${CY} A${R},${r1(R * RING_FLATTEN)} 0 0,${sweep} ${CX + R},${CY}`;
+  const arc = (R, sweep) => `M${OCX - R},${OCY} A${R},${r1(R * RING_FLATTEN)} 0 0,${sweep} ${OCX + R},${OCY}`;
   // Each orbit is layered: a soft glow, a crisp core line, and a fine bright
   // line on top. The near half is brighter than the far half, and in animated
   // mode a pulse of light travels along the near half.
@@ -378,7 +208,7 @@ function orbits(data, t, animate, blockers) {
     const ry = r1(R * RING_FLATTEN);
     const radius = 14 + 10 * Math.sqrt(repo.stars / maxStars);
     const seed = hashName(repo.name);
-    // Planets always use the theme's neon palette, one distinct colour each.
+    // Planets use the theme's planet palette, one distinct colour each.
     const color = t.planets[i % t.planets.length];
     const name = esc(repo.name.length > 18 ? `${repo.name.slice(0, 17)}…` : repo.name);
     const starsLabel = repo.stars > 0 ? `<tspan fill="${t.mute}" font-weight="500"> ★${repo.stars}</tspan>` : "";
@@ -387,7 +217,7 @@ function orbits(data, t, animate, blockers) {
     const begin = r1(-duration * phase);
 
     // Path starts on the left and runs through the near side first.
-    const path = `M${CX - R},${CY} a${R},${ry} 0 1,0 ${2 * R},0 a${R},${ry} 0 1,0 ${-2 * R},0`;
+    const path = `M${OCX - R},${OCY} a${R},${ry} 0 1,0 ${2 * R},0 a${R},${ry} 0 1,0 ${-2 * R},0`;
     const samples = 12;
     // Planets swell slightly on the near side and shrink on the far side.
     const scales = Array.from({ length: samples + 1 }, (_, k) => 1 + 0.18 * Math.sin((2 * Math.PI * k) / samples));
@@ -400,23 +230,23 @@ function orbits(data, t, animate, blockers) {
     const scale = animate
       ? `<animateTransform attributeName="transform" type="scale" values="${scales.map((s) => r1(s * 100) / 100).join(";")}" dur="${duration}s" begin="${begin}s" repeatCount="indefinite"/>`
       : "";
-    const place = animate ? "" : ` transform="translate(${r1(CX + R * Math.cos(angle))} ${r1(CY + R * RING_FLATTEN * near)})"`;
+    const place = animate ? "" : ` transform="translate(${r1(OCX + R * Math.cos(angle))} ${r1(OCY + R * RING_FLATTEN * near)})"`;
     const staticScale = animate ? "" : ` transform="scale(${r1((1 + 0.18 * near) * 100) / 100})"`;
 
     // Names sit in their own top layer. On the near side they always show. On
     // the far side a name shows only while it would sit in clear sky, and hides
-    // while it would overlap the grid or the bars, so it is never drawn over
-    // the terrain or cut off.
+    // while it would overlap the pie, so it is never drawn over the pie or cut
+    // off.
     const chars = Math.min(repo.name.length, 18) + (repo.stars > 0 ? 2 + String(repo.stars).length : 0);
     const labelBox = (x, y, sc) => {
       const w = (chars * 7 + 8) * sc, base = y + (-radius - 11) * sc;
       return { x0: x - w / 2, x1: x + w / 2, y0: base - 13 * sc, y1: base + 4 * sc };
     };
-    const shown = (x, y, sc, isNear) => isNear || !hitsTerrain(labelBox(x, y, sc), blockers);
+    const shown = (x, y, sc, isNear) => isNear || !hitsPie(labelBox(x, y, sc), blockers);
     const label = `<text y="${r1(-radius - 11)}" text-anchor="middle" font-size="12" font-weight="600" fill="${t.ink}" paint-order="stroke" stroke="${t.bgOuter}" stroke-width="3" stroke-linejoin="round">${name}${starsLabel}</text>`;
     const sphere = planetSphere(i, radius, color, seed, i === 0, animate, t);
     defs.push(sphere.defs);
-    // Each planet is drawn twice: once behind the terrain and once in front.
+    // Each planet is drawn twice: once behind the pie and once in front.
     // In animated mode exactly one copy is visible at a time. The near copy
     // shows for the first half of the orbit (the near side) and the far copy
     // for the second half, so the planet and its label always switch layers
@@ -447,7 +277,7 @@ function orbits(data, t, animate, blockers) {
         ? ""
         : `<g>${motion}${vis}<g>${scale}${label}</g></g>`;
     } else {
-      const x = CX + R * Math.cos(angle), y = CY + R * RING_FLATTEN * near;
+      const x = OCX + R * Math.cos(angle), y = OCY + R * RING_FLATTEN * near;
       labelLayer = shown(x, y, 1 + 0.18 * near, near >= 0) ? `<g${place}><g${staticScale}>${label}</g></g>` : "";
     }
 
@@ -469,56 +299,129 @@ function orbits(data, t, animate, blockers) {
   };
 }
 
-// Top-left card: identity, four headline numbers in a row, and a sparkline.
-function panel(data, stats, t) {
-  const x = 40, y = 36, w = 440, h = 236;
-  const col = (w - 56) / 4;
-  const stat = (i, value, label) =>
-    `<text x="${r1(x + 28 + i * col)}" y="${y + 138}" font-size="26" font-weight="700" letter-spacing="-0.5" fill="${t.ink}">${esc(value)}</text>` +
-    `<text x="${r1(x + 28 + i * col)}" y="${y + 156}" font-size="11.5" fill="${t.mute}">${esc(label)}</text>`;
+// Contribution mix: a small upright 3D pie facing the viewer, showing how the
+// year's contributions split between commits, pull requests, issues and code
+// review, as shares of those four, like GitHub's overview.
+// Each slice's share and name sit beside it on a short leader line, as on
+// GitHub's activity overview, so the split never relies on colour alone.
+function mixPie(data, t, x0, w, top, size = 1) {
+  const m = data.mix || {};
+  const known = [
+    ["Commits", m.commits], ["Pull requests", m.pullRequests], ["Issues", m.issues], ["Code review", m.reviews],
+  ].map(([label, v]) => [label, Math.max(0, Math.floor(Number(v)) || 0)]);
+  const parts = known.map(([label, v], i) => ({ label, v, colour: t.mix[i] })).filter((p) => p.v > 0);
+  const sum = parts.reduce((s, p) => s + p.v, 0);
 
-  const series = stats.weekly.slice(-26);
-  const top = Math.max(1, ...series);
-  const sx0 = x + 28, sw = w - 56, sy0 = y + h - 18, sh = 30;
-  const step = sw / Math.max(1, series.length - 1);
-  const line = series.map((v, i) => `${r1(sx0 + i * step)},${r1(sy0 - (v / top) * sh)}`);
-  const area = `${sx0},${sy0} ${line.join(" ")} ${r1(sx0 + sw)},${sy0}`;
-  const last = line[line.length - 1] || `${sx0},${sy0}`;
-  const [lx, ly] = last.split(",");
+  // Shares that add up to exactly 100 (largest remainder).
+  const raw = parts.map((p) => (p.v / (sum || 1)) * 100);
+  const pct = raw.map(Math.floor);
+  raw.map((v, i) => [v - pct[i], i]).sort((a, b) => b[0] - a[0]).slice(0, 100 - pct.reduce((s, v) => s + v, 0)).forEach(([, i]) => pct[i]++);
 
-  return `<g>
-  <rect x="${x}" y="${y}" width="${w}" height="${h}" rx="22" fill="url(#glassFill)" stroke="url(#glassEdge)" stroke-width="${t.neonFrame ? 2 : 1}"${t.neonFrame ? ` filter="url(#neon)"` : ""}/>
-  <rect x="${x + 28}" y="${y + 26}" width="18" height="3" rx="1.5" fill="${t.glow}"/>
-  <text x="${x + 52}" y="${y + 31}" font-size="9.5" font-weight="700" letter-spacing="1.6" fill="${t.glow}">CONTRIBUTION OBSERVATORY</text>
-  <text x="${x + w - 28}" y="${y + 31}" text-anchor="end" font-size="10.5" fill="${t.mute}" opacity=".8">Updated ${esc(data.generatedAt)}</text>
-  <text x="${x + 28}" y="${y + 62}" font-size="24" font-weight="700" letter-spacing="-0.3" fill="${t.ink}">${esc(data.name)}</text>
-  <text x="${x + 28}" y="${y + 82}" font-size="13" fill="${t.mute}">@${esc(data.login)} · last 12 months</text>
-  <line x1="${x + 28}" x2="${x + w - 28}" y1="${y + 100}" y2="${y + 100}" stroke="${t.rule}"/>
-  ${stat(0, stats.total.toLocaleString("en-US"), "contributions")}
-  ${stat(1, `${stats.activeDays}`, "active days")}
-  ${stat(2, `${stats.current} d`, "current streak")}
-  ${stat(3, `${stats.longest} d`, "longest streak")}
-  <text x="${x + 28}" y="${y + 184}" font-size="11" fill="${t.mute}">Weekly activity · last 26 weeks</text>
-  <polygon points="${area}" fill="url(#sparkFill)"/>
-  <polyline points="${line.join(" ")}" fill="none" stroke="${t.glow}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
-  <circle cx="${lx}" cy="${ly}" r="3.2" fill="${t.glow}" stroke="${t.bgOuter}" stroke-width="1.5"/>
-</g>`;
+  // An upright disc facing the viewer, like a coin standing on its edge:
+  // angle 0 is 12 o'clock and slices run clockwise. The disc has depth, so
+  // its rim shows on the lower right and the hole's wall on the upper left.
+  const R = 40 * size, hole = 0.46, depth = 7 * size;
+  const cx = x0 + w / 2, cy = top + 22 + R;
+  const off = { x: depth * 0.72, y: depth * 0.7 };
+  const pt = (k, a, back = false) => ({ x: cx + k * R * Math.sin(a) + (back ? off.x : 0), y: cy - k * R * Math.cos(a) + (back ? off.y : 0) });
+  const arcPts = (k, a0, a1, back = false, n = 24) => Array.from({ length: n + 1 }, (_, i) => pt(k, a0 + ((a1 - a0) * i) / n, back));
+  // Where a ring's wall faces the viewer: the outer wall where it faces the
+  // depth direction, the hole's wall where it faces away from it.
+  const facesOut = (a) => Math.sin(a) * off.x - Math.cos(a) * off.y > 0;
+  const runs = (a0, a1, want) => {
+    const list = [];
+    let start = null;
+    for (let i = 0; i <= 48; i++) {
+      const a = a0 + ((a1 - a0) * i) / 48;
+      if (want(a) && start === null) start = a;
+      if ((!want(a) || i === 48) && start !== null) { list.push([start, a]); start = null; }
+    }
+    return list;
+  };
+  const poly = (list, fill) => `<polygon points="${list.map((p) => `${r1(p.x)},${r1(p.y)}`).join(" ")}" fill="${fill}"/>`;
+  let a = 0;
+  const slices = parts.map((p, i) => {
+    const span = (p.v / sum) * 2 * Math.PI;
+    const s = { ...p, i, pct: pct[i], a0: a, a1: a + span, mid: a + span / 2 };
+    a += span;
+    return s;
+  });
+
+  // Materials: each face is lit from the top left; the rim and the hole's
+  // wall fall into shade along their length.
+  const grads = [];
+  const lin = (id, x1, y1, x2, y2, stops) =>
+    grads.push(`<linearGradient id="${id}" gradientUnits="userSpaceOnUse" x1="${r1(x1)}" y1="${r1(y1)}" x2="${r1(x2)}" y2="${r1(y2)}">` +
+      stops.map(([o, c]) => `<stop offset="${o}" stop-color="${c}"/>`).join("") + `</linearGradient>`);
+  let sides = "", inner = "", tops = "";
+  for (const s of slices) {
+    lin(`mixF${s.i}`, cx - R, cy - R, cx + R, cy + R, [[0, adjust(s.colour, 1.22)], [0.5, s.colour], [1, adjust(s.colour, 0.82)]]);
+    lin(`mixR${s.i}`, cx - R, cy - R, cx + R + off.x, cy + R + off.y, [[0, adjust(s.colour, 0.72)], [1, adjust(s.colour, 0.42)]]);
+    for (const [l, h] of runs(s.a0, s.a1, facesOut)) sides += poly([...arcPts(1, l, h), ...arcPts(1, l, h, true).reverse()], `url(#mixR${s.i})`);
+    for (const [l, h] of runs(s.a0, s.a1, (a) => !facesOut(a))) inner += poly([...arcPts(hole, l, h), ...arcPts(hole, l, h, true).reverse()], adjust(s.colour, 0.38));
+    tops += poly([...arcPts(1, s.a0, s.a1), ...arcPts(hole, s.a0, s.a1).reverse()], `url(#mixF${s.i})`);
+  }
+  // Even-width separators between slices, in the background colour, cut
+  // through the face and the rim alike.
+  const seps = slices.length > 1
+    ? slices.map((s) => {
+      const p0 = pt(hole, s.a0), p1 = pt(1, s.a0), p2 = pt(1, s.a0, true);
+      return `<line x1="${r1(p0.x)}" y1="${r1(p0.y)}" x2="${r1(p1.x)}" y2="${r1(p1.y)}"/>` +
+        (facesOut(s.a0) ? `<line x1="${r1(p1.x)}" y1="${r1(p1.y)}" x2="${r1(p2.x)}" y2="${r1(p2.y)}"/>` : "");
+    }).join("")
+    : "";
+  const sepLayer = seps ? `<g stroke="${t.bgOuter}" stroke-width="1.8" stroke-linecap="round">${seps}</g>` : "";
+  // A glossy highlight along the top-left of the outer edge, a soft shadow
+  // inside the hole, and a contact shadow beneath the pie.
+  const rimLight = `<path d="M${r1(pt(1.0, -1.25).x)},${r1(pt(1.0, -1.25).y)} A${r1(R)},${r1(R)} 0 0,1 ${r1(pt(1.0, 0.35).x)},${r1(pt(1.0, 0.35).y)}" fill="none" stroke="url(#mixRim)" stroke-width="1.6" stroke-linecap="round"/>`;
+  const holeShade = `<circle cx="${r1(cx)}" cy="${r1(cy)}" r="${r1(R * hole)}" fill="url(#mixHoleShade)"/>`;
+  const ground = `<ellipse cx="${r1(cx + off.x)}" cy="${r1(cy + R + off.y + 4)}" rx="${r1(R * 0.88)}" ry="${r1(R * 0.12)}" fill="${t.shadow}" opacity="${t.dark ? ".55" : ".22"}" filter="url(#soft4)"/>`;
+  const gloss = sum ? `<circle cx="${r1(cx)}" cy="${r1(cy)}" r="${r1(R)}" fill="url(#mixGloss)"/>` : "";
+  const track = sum ? "" : poly([...arcPts(1, 0, 2 * Math.PI, false, 48), ...arcPts(hole, 0, 2 * Math.PI, false, 48).reverse()], t.mixTrack);
+
+  // Labels: slices on the right half label to the right, the rest to the
+  // left, spread so they never overlap.
+  const labelFor = (s, side, ly) => {
+    const edge = pt(1.04, s.mid, facesOut(s.mid));
+    const lx = side > 0 ? cx + R + 36 : cx - R - 36;
+    return `<polyline points="${r1(edge.x)},${r1(edge.y)} ${r1(lx - side * 10)},${r1(ly - 4)} ${r1(lx)},${r1(ly - 4)}" fill="none" stroke="${s.colour}" stroke-width=".9" stroke-opacity=".9" stroke-linejoin="round"/>` +
+      `<circle cx="${r1(edge.x)}" cy="${r1(edge.y)}" r="2.6" fill="${t.bgOuter}" stroke="${s.colour}" stroke-width="1.3"/>` +
+      `<circle cx="${r1(lx)}" cy="${r1(ly - 4)}" r="1.4" fill="${s.colour}"/>` +
+      `<text x="${r1(lx + side * 6)}" y="${r1(ly)}" text-anchor="${side > 0 ? "start" : "end"}" font-size="12" letter-spacing=".1" fill="${t.mute}" paint-order="stroke" stroke="${t.bgOuter}" stroke-width="3" stroke-linejoin="round"><tspan fill="${t.ink}" font-size="13" font-weight="700">${s.pct}%</tspan> ${esc(s.label)}</text>`;
+  };
+  const place = (list, side) => {
+    list.sort((p, q) => pt(1, p.mid).y - pt(1, q.mid).y);
+    const step = 18, first = cy - ((list.length - 1) * step) / 2 + 8;
+    return list.map((s, i) => labelFor(s, side, first + i * step)).join("");
+  };
+  const right = slices.filter((s) => Math.sin(s.mid) >= 0), left = slices.filter((s) => Math.sin(s.mid) < 0);
+  const labels = sum ? place(right, 1) + place(left, -1) : `<text x="${r1(cx + R + 22)}" y="${cy + 4}" font-size="11" fill="${t.mute}">No activity yet</text>`;
+
+  return `<text x="${x0 + w / 2}" y="${top}" text-anchor="middle" font-size="12" font-weight="600" letter-spacing=".4" fill="${t.mute}">Contribution mix · last 12 months</text>
+  <defs>${grads.join("")}
+  <radialGradient id="mixGloss" cx="34%" cy="26%" r="78%"><stop offset="0" stop-color="#ffffff" stop-opacity=".26"/><stop offset=".5" stop-color="#ffffff" stop-opacity=".04"/><stop offset=".75" stop-color="#ffffff" stop-opacity="0"/></radialGradient>
+  <radialGradient id="mixHoleShade" r="50%"><stop offset=".55" stop-color="#000" stop-opacity="0"/><stop offset="1" stop-color="#000" stop-opacity="${t.dark ? ".55" : ".22"}"/></radialGradient>
+  <linearGradient id="mixRim" x1="0" y1="1" x2="1" y2="0"><stop offset="0" stop-color="#ffffff" stop-opacity="0"/><stop offset=".5" stop-color="#ffffff" stop-opacity=".75"/><stop offset="1" stop-color="#ffffff" stop-opacity="0"/></linearGradient>
+  <mask id="mixHole"><rect x="${r1(cx - R - 2)}" y="${r1(cy - R - 2)}" width="${r1(2 * R + 4)}" height="${r1(2 * R + 4)}" fill="#fff"/><circle cx="${r1(cx)}" cy="${r1(cy)}" r="${r1(R * hole)}" fill="#000"/></mask></defs>
+  ${ground}${sides}${inner}${tops}<g mask="url(#mixHole)">${gloss}</g>${sum ? holeShade + sepLayer + rimLight : ""}${track}${labels}`;
 }
 
-// Bottom-right card: the intensity ramp drawn as tiny prisms that echo the terrain, and the peak day.
+// Top left: the contribution mix as a free-standing small 3D pie, with its
+// title above it.
+function mixCorner(data, t) {
+  return mixPie(data, t, 40, 440, 62, 1.45);
+}
+
+// Bottom-right card: the year's colour wheel and the peak day.
 function legend(stats, t) {
   const w = 340, h = 128, x = W - 40 - w, y = H - 28 - h;
+  // The year's colour wheel as a row of small wedge tops, oldest month first.
   let ramp = "";
-  t.ramp.forEach((color, i) => {
-    const p = makeProjector({ yawDeg: YAW, pitchDeg: PITCH, cx: x + 42 + i * 26, cy: y + 72 });
-    const size = 12;
-    if (i === 0) {
-      ramp += poly([p(-size / 2, -size / 2), p(size / 2, -size / 2), p(size / 2, size / 2), p(-size / 2, size / 2)], color, ` stroke="${t.cellEdge}" stroke-width="${t.dark ? ".6" : "1.2"}"`);
-      return;
-    }
-    for (const face of prismFaces(p, -size / 2, -size / 2, size, i * 9)) {
-      ramp += poly(face.pts, adjust(color, face.shade), face.top ? ` stroke="${t.cellEdge}" stroke-width=".45" stroke-opacity=".62"` : "");
-    }
+  t.wheel.forEach((color, i) => {
+    const cx = x + 40 + i * 24, cy = y + 66;
+    ramp += `<path d="M${cx - 9},${cy + 9} L${cx + 9},${cy + 9} L${cx + 9},${cy - 3 - i * 2} L${cx - 9},${cy - 3 - i * 2} Z" fill="${adjust(color, 0.8)}"/>` +
+      `<path d="M${cx - 9},${cy - 3 - i * 2} L${cx - 3},${cy - 8 - i * 2} L${cx + 13},${cy - 8 - i * 2} L${cx + 9},${cy - 3 - i * 2} Z" fill="${adjust(color, 1.2)}"/>` +
+      `<path d="M${cx + 9},${cy + 9} L${cx + 13},${cy + 4} L${cx + 13},${cy - 8 - i * 2} L${cx + 9},${cy - 3 - i * 2} Z" fill="${adjust(color, 0.6)}"/>`;
   });
 
   const px = x + 196;
@@ -528,11 +431,11 @@ function legend(stats, t) {
     : `<text x="${px}" y="${y + 70}" font-size="12" fill="${t.mute}">No activity yet</text>`;
 
   return `<g>
-  <rect x="${x}" y="${y}" width="${w}" height="${h}" rx="18" fill="url(#glassFill)" stroke="url(#glassEdge)" stroke-width="${t.neonFrame ? 2 : 1}"${t.neonFrame ? ` filter="url(#neon)"` : ""}/>
-  <text x="${x + 28}" y="${y + 28}" font-size="11" fill="${t.mute}">Daily intensity</text>
+  <rect x="${x}" y="${y}" width="${w}" height="${h}" rx="18" fill="url(#glassFill)" stroke="url(#glassEdge)" stroke-width="1"/>
+  <text x="${x + 28}" y="${y + 28}" font-size="11" fill="${t.mute}">Month wedges</text>
   ${ramp}
-  <text x="${x + 28}" y="${y + 96}" font-size="10" fill="${t.mute}" opacity=".8">less</text>
-  <text x="${x + 162}" y="${y + 96}" font-size="10" fill="${t.mute}" opacity=".8" text-anchor="end">more</text>
+  <text x="${x + 28}" y="${y + 96}" font-size="10" fill="${t.mute}" opacity=".8">oldest</text>
+  <text x="${x + 168}" y="${y + 96}" font-size="10" fill="${t.mute}" opacity=".8" text-anchor="end">latest</text>
   <line x1="${x + 178}" x2="${x + 178}" y1="${y + 18}" y2="${y + 96}" stroke="${t.rule}"/>
   <circle cx="${px + 4}" cy="${y + 24}" r="4" fill="${t.peak}" filter="url(#glow)"/>
   <text x="${px + 14}" y="${y + 28}" font-size="11" fill="${t.mute}">Peak day</text>
@@ -546,12 +449,14 @@ export function renderSvg(data, { theme = "aurora", animate = true } = {}) {
   if (!t) throw new Error(`Unknown theme "${theme}". Available: ${Object.keys(themes).join(", ")}`);
 
   const stats = computeStats(data.weeks);
-  const project = makeProjector({ yawDeg: YAW, pitchDeg: PITCH, cx: CX, cy: CY });
-  const { plate, bars, months, peakTop, blockers } = terrain(data, stats, t, project, animate);
-  const orbit = orbits(data, t, animate, blockers);
+  // The pie is seen straight on from above the front, so the year reads
+  // clockwise like a clock face.
+  const project = makeProjector({ yawDeg: 0, pitchDeg: 30, cx: OCX, cy: OCY });
+  const year = pie({ data, t, project, animate });
+  const orbit = orbits(data, t, animate, year.blockers);
   const label = `${data.name}: ${stats.total} contributions, longest streak ${stats.longest} days`;
   const desc =
-    `3D contribution terrain for @${data.login}: ${stats.total} contributions over ${stats.activeDays} active days, ` +
+    `3D contribution pie for @${data.login}: ${stats.total} contributions over ${stats.activeDays} active days, ` +
     `current streak ${stats.current} days, longest streak ${stats.longest} days` +
     (stats.peak.date ? `, busiest day ${stats.peak.date} with ${stats.max} contributions.` : ".");
 
@@ -562,35 +467,28 @@ export function renderSvg(data, { theme = "aurora", animate = true } = {}) {
   <radialGradient id="bg" cx="62%" cy="58%" r="85%"><stop offset="0" stop-color="${t.bgInner}"/><stop offset=".55" stop-color="${t.bgMid}"/><stop offset="1" stop-color="${t.bgOuter}"/></radialGradient>
   <radialGradient id="nebA"><stop offset="0" stop-color="${t.nebulaA}" stop-opacity="${t.dark ? 0.28 : 0.6}"/><stop offset="1" stop-color="${t.nebulaA}" stop-opacity="0"/></radialGradient>
   <radialGradient id="nebB"><stop offset="0" stop-color="${t.nebulaB}" stop-opacity="${t.dark ? 0.22 : 0.55}"/><stop offset="1" stop-color="${t.nebulaB}" stop-opacity="0"/></radialGradient>
-  <radialGradient id="gridFade" cx="50%" cy="58%" r="52%"><stop offset="0" stop-color="#fff"/><stop offset=".55" stop-color="#fff" stop-opacity=".5"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient>
-  <mask id="gridMask"><rect width="${W}" height="${H}" fill="url(#gridFade)"/></mask>
   <linearGradient id="glassFill" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#fff" stop-opacity="${t.dark ? 0.09 : 1}"/><stop offset="1" stop-color="#fff" stop-opacity="${t.dark ? 0.03 : 0.97}"/></linearGradient>
   <linearGradient id="glassEdge" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${t.borderA}" stop-opacity="${t.dark ? 0.35 : 0.9}"/><stop offset="1" stop-color="${t.borderB}" stop-opacity="${t.dark ? 0.35 : 0.9}"/></linearGradient>
-  <linearGradient id="sparkFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${t.glow}" stop-opacity=".35"/><stop offset="1" stop-color="${t.glow}" stop-opacity="0"/></linearGradient>
-  <linearGradient id="plateFill" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${t.dark ? adjust(t.plateTop, 0.85) : t.plateTop}"/><stop offset="1" stop-color="${t.dark ? adjust(t.plateTop, 1.08) : t.plateTop}"/></linearGradient>
   <linearGradient id="ringFade" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="${t.ring}" stop-opacity=".4"/><stop offset=".5" stop-color="${t.ring}" stop-opacity=".95"/><stop offset="1" stop-color="${t.ring}" stop-opacity=".4"/></linearGradient>
   <linearGradient id="plTerm" x1=".15" y1=".1" x2=".95" y2=".95"><stop offset="0" stop-color="#000" stop-opacity="0"/><stop offset=".5" stop-color="#000" stop-opacity="0"/><stop offset=".8" stop-color="#000" stop-opacity=".35"/><stop offset="1" stop-color="#000" stop-opacity=".7"/></linearGradient>
   <radialGradient id="plSpec"><stop offset="0" stop-color="#fff" stop-opacity=".95"/><stop offset=".5" stop-color="#fff" stop-opacity=".35"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient>
   <filter id="soft4" x="-50%" y="-200%" width="200%" height="500%"><feGaussianBlur stdDeviation="3"/></filter>
   ${orbit.defs}
+  ${year.defs}
   <radialGradient id="floorGlow" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="${t.glow}" stop-opacity="${t.dark ? 0.25 : 0.06}"/><stop offset="1" stop-color="${t.glow}" stop-opacity="0"/></radialGradient>
-  <filter id="neon" x="-10%" y="-10%" width="120%" height="120%" filterUnits="objectBoundingBox"><feGaussianBlur in="SourceGraphic" stdDeviation="2.6" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
   <filter id="glow" x="-80%" y="-80%" width="260%" height="260%"><feGaussianBlur stdDeviation="3" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
   <filter id="soft" x="-20%" y="-60%" width="140%" height="220%"><feGaussianBlur stdDeviation="12"/></filter>
 </defs>
 <rect width="${W}" height="${H}" fill="url(#bg)"/>
 ${nebula()}
 ${t.stars ? stars(animate) : ""}
-${floorGrid(data, project, t)}
-<ellipse cx="${CX}" cy="${CY}" rx="660" ry="280" fill="url(#floorGlow)"/>
+<ellipse cx="${OCX}" cy="${OCY + 40}" rx="520" ry="200" fill="url(#floorGlow)"/>
 ${orbit.back}
-${plate}
-${bars}
-${months}
-${beacon(peakTop, stats, t)}
+${year.scene}
 ${orbit.front}
+${year.peakLabel}
 ${orbit.labels}
-${panel(data, stats, t)}
+${mixCorner(data, t)}
 ${legend(stats, t)}
 </svg>
 `;
