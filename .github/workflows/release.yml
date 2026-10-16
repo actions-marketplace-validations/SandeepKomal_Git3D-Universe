@@ -6,7 +6,7 @@ on:
       version:
         description: "Release version matching package.json (example: 1.0.0)"
         required: true
-        default: "1.0.0"
+        default: "2.0.0"
       prerelease:
         description: "Mark the GitHub release as a prerelease"
         required: false

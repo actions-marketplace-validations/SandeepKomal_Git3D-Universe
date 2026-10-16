@@ -27,24 +27,21 @@ Use the reviewed release tag or an immutable commit SHA in consuming workflows r
 
 ## Use on your profile
 
-This workflow installs Git3D Universe directly from the published Action.
+Follow these two steps in order. **Step 1** creates and updates the SVG; **Step 2** displays that SVG in your profile README.
 
-### Step 1 — Add the workflow
+### Step 1 — Add the GitHub Actions workflow
 
-Create this file in your profile repository:
+In your profile repository, create this file:
 
 `.github/workflows/git3d-universe.yml`
 
-The workflow refreshes the SVG once per hour, chooses a light or dark theme from your local timezone, validates the generated SVG, and commits it back to the repository.
+Paste the workflow below into that file. It runs once per hour, selects the theme using your chosen timezone, validates the generated SVG, and commits the image to your repository.
 
 For production, use the stable release tag `v2.0.0` or an immutable commit SHA.
 
 ```yaml
-# Copy this file into:
-#
-# .github/workflows/git3d-universe.yml
-#
-# Change the timezone below to your own IANA timezone.
+# Save as: .github/workflows/git3d-universe.yml
+# Set GIT3D_TIMEZONE to your IANA timezone.
 
 name: Git3D Universe
 
@@ -52,8 +49,6 @@ on:
   workflow_dispatch:
 
   # Check once per hour.
-  # The actual theme is calculated using the configured
-  # local timezone.
   schedule:
     - cron: "17 * * * *"
 
@@ -71,7 +66,6 @@ env:
   # London: Europe/London
   # Tokyo: Asia/Tokyo
   GIT3D_TIMEZONE: Asia/Kolkata
-
   GIT3D_DAY_START: "06"
   GIT3D_NIGHT_START: "18"
 
@@ -171,22 +165,25 @@ jobs:
 
           git commit -m "chore: update Git3D Universe (${{ steps.theme.outputs.mode }})"
           git push origin main
+```
 
-### Step 2 — Add Git3D Universe to your README
+**Before moving to Step 2:** open the repository's **Actions** tab and run **Git3D Universe** manually once. Confirm the workflow succeeds and creates `profile/git3d-universe.svg`.
 
-After the workflow runs once, it creates:
+### Step 2 — Display Git3D Universe in your profile README
 
-`profile/git3d-universe.svg`
+After Step 1 completes successfully, open the profile repository's `README.md`.
 
-Add this Markdown to your profile README:
+Add this Markdown wherever you want the visualization to appear:
 
 ```md
 ![Git3D Universe](./profile/git3d-universe.svg)
 ```
 
-Do not paste the generated SVG into `README.md`; keep it as the generated file and reference it with a normal Markdown image.
+Commit the README change. GitHub will render the generated SVG in your profile README.
 
-### Inputs
+**Important:** do not paste the SVG source into `README.md`. Keep the generated file at `profile/git3d-universe.svg` and reference it with the Markdown image link above. The workflow updates the SVG; it does not edit the README for you.
+
+## Inputs
 
 | Input | Required | Default | Description |
 | --- | --- | --- | --- |
@@ -196,13 +193,11 @@ Do not paste the generated SVG into `README.md`; keep it as the generated file a
 | `output` | No | `profile/git3d-universe.svg` | Output SVG path |
 | `no-motion` | No | `false` | Disable SVG orbit animation |
 
-### Permissions and token handling
+## Permissions and token handling
 
 Start with the least privilege your workflow needs. The example grants `contents: write` because it is intended to commit the generated SVG back to a profile repository.
 
 The Action passes the supplied token through the `GITHUB_TOKEN` environment variable. It does not place the token in command-line arguments.
-
-The Action generates the SVG file; it does not edit `README.md`. Your workflow commits the SVG to the repository, and your README displays it with a normal Markdown image reference such as `![Git3D Universe](./profile/git3d-universe.svg)`.
 
 The renderer requests GitHub data directly from `https://api.github.com/graphql` and does not use a hosted rendering service.
 
@@ -266,17 +261,3 @@ See [THIRD-PARTY-NOTICES.md](./THIRD-PARTY-NOTICES.md) for external Action/depen
 For bugs and feature requests, use the [GitHub issue tracker](https://github.com/SandeepKomal/Git3D-Universe/issues).
 
 For security vulnerabilities, follow [SECURITY.md](./SECURITY.md) and do not disclose sensitive details in a public issue.
-
-For licensing and provenance information, see [EULA.md](./EULA.md) and [ORIGINALITY-AND-LICENSING.md](./ORIGINALITY-AND-LICENSING.md).
-
-For privacy information, see [PRIVACY.md](./PRIVACY.md).
-
-## Copyright and licensing
-
-Copyright (c) 2026 Sandeep Komal Pothu.
-
-Git3D Universe is released under the MIT License. The complete license text is available in [LICENSE](./LICENSE).
-
-The repository currently declares no npm runtime dependencies and does not bundle third-party fonts, images, icons, templates, or rendering libraries. The Marketplace wrapper does invoke the GitHub-maintained `actions/setup-node` action; its license is documented in [THIRD-PARTY-NOTICES.md](./THIRD-PARTY-NOTICES.md).
-
-This documentation describes the project's current licensing, provenance, and security posture; it is not legal advice.
