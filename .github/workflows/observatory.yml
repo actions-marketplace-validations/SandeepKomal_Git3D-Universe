@@ -1,18 +1,9 @@
-# Copy this file into:
-#
-# .github/workflows/observatory.yml
-#
-# Then change OBSERVATORY_TIMEZONE below to your own
-# IANA timezone.
 
 name: Profile Observatory
 
 on:
   workflow_dispatch:
 
-  # Check once per hour.
-  # The actual theme is calculated using the configured
-  # local timezone.
   schedule:
     - cron: "17 * * * *"
 
@@ -21,71 +12,25 @@ permissions:
 
 concurrency:
   group: profile-observatory
-  cancel-in-progress: true
-
-# ============================================================
-# USER CONFIGURATION
-# ============================================================
+  cancel-in-progress: false
 
 env:
-
-  # -----------------------------------------------------------
-  # Your local IANA timezone.
-  #
-  # Examples:
-  #
-  # India:
-  #   Asia/Kolkata
-  #
-  # New York:
-  #   America/New_York
-  #
-  # Los Angeles:
-  #   America/Los_Angeles
-  #
-  # London:
-  #   Europe/London
-  #
-  # Berlin:
-  #   Europe/Berlin
-  #
-  # Tokyo:
-  #   Asia/Tokyo
-  #
-  # Singapore:
-  #   Asia/Singapore
-  #
-  # Sydney:
-  #   Australia/Sydney
-  # -----------------------------------------------------------
-
   OBSERVATORY_TIMEZONE: Asia/Kolkata
-
-  # Daylight starts at 06:00 local time.
   OBSERVATORY_DAY_START: "06"
-
-  # Aurora/night starts at 18:00 local time.
   OBSERVATORY_NIGHT_START: "18"
 
 jobs:
-
   generate:
     name: Generate Profile Observatory
     runs-on: ubuntu-latest
 
     steps:
-
-      # -------------------------------------------------------
-      # Checkout profile repository
-      # -------------------------------------------------------
       - name: Checkout profile repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: true
 
-      # -------------------------------------------------------
-      # Checkout reusable generator
-      # -------------------------------------------------------
       - name: Checkout Profile Observatory
         uses: actions/checkout@v4
         with:
@@ -93,17 +38,11 @@ jobs:
           path: .observatory
           ref: main
 
-      # -------------------------------------------------------
-      # Node.js
-      # -------------------------------------------------------
       - name: Setup Node.js
         uses: actions/setup-node@v7.1.0
         with:
           node-version: 20
 
-      # -------------------------------------------------------
-      # Determine local theme
-      # -------------------------------------------------------
       - name: Determine Observatory theme
         id: theme
         shell: bash
@@ -114,10 +53,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "Timezone: ${TIMEZONE}"
-
           if ! TZ="${TIMEZONE}" date >/dev/null 2>&1; then
-            echo "ERROR: Invalid IANA timezone: ${TIMEZONE}"
+            echo "::error::Invalid IANA timezone: ${TIMEZONE}"
             exit 1
           fi
 
@@ -127,17 +64,13 @@ jobs:
           echo "Local time: ${LOCAL_DATE}"
           echo "Local hour: ${HOUR}"
 
-          if [ "${HOUR}" -ge "${DAY_START}" ] && \
-             [ "${HOUR}" -lt "${NIGHT_START}" ]; then
-
+          if (( 10#${HOUR} >= 10#${DAY_START} &&
+                10#${HOUR} < 10#${NIGHT_START} )); then
             THEME="daylight"
             MODE="DAY"
-
           else
-
             THEME="aurora"
             MODE="NIGHT"
-
           fi
 
           echo "Theme: ${THEME}"
@@ -147,9 +80,6 @@ jobs:
           echo "mode=${MODE}" >> "$GITHUB_OUTPUT"
           echo "local_time=${LOCAL_DATE}" >> "$GITHUB_OUTPUT"
 
-      # -------------------------------------------------------
-      # Generate SVG
-      # -------------------------------------------------------
       - name: Generate Observatory
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -167,9 +97,6 @@ jobs:
 
           ls -lh profile/observatory.svg
 
-      # -------------------------------------------------------
-      # Validate SVG
-      # -------------------------------------------------------
       - name: Validate Observatory
         env:
           SVG: profile/observatory.svg
@@ -177,12 +104,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          test -f "${SVG}"
           test -s "${SVG}"
-
           grep -q "<svg" "${SVG}"
           grep -q "</svg>" "${SVG}"
-
           grep -q "@${EXPECTED_LOGIN}" "${SVG}"
 
           grep -q "contributions" "${SVG}"
@@ -191,42 +115,69 @@ jobs:
           grep -q "longest streak" "${SVG}"
 
           if grep -q "Ada Example" "${SVG}"; then
-            echo "ERROR: Sample profile detected."
+            echo "::error::Sample profile detected."
             exit 1
           fi
 
           if grep -q "ada-example" "${SVG}"; then
-            echo "ERROR: Sample GitHub login detected."
+            echo "::error::Sample GitHub login detected."
             exit 1
           fi
 
           SIZE=$(wc -c < "${SVG}")
 
-          if [ "${SIZE}" -lt 5000 ]; then
-            echo "ERROR: Generated SVG is unexpectedly small."
+          if (( SIZE < 5000 )); then
+            echo "::error::Generated SVG is unexpectedly small."
             exit 1
           fi
 
-          echo "Validation passed."
+          echo "SVG validation passed."
 
-      # -------------------------------------------------------
-      # Commit
-      # -------------------------------------------------------
-      - name: Commit Observatory
+      - name: Commit and push Observatory safely
+        env:
+          MODE: ${{ steps.theme.outputs.mode }}
+        shell: bash
         run: |
           set -euo pipefail
 
           git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add profile/observatory.svg
+          # Preserve the validated output while refreshing the branch.
+          GENERATED_SVG="${RUNNER_TEMP}/observatory.svg"
+          cp profile/observatory.svg "${GENERATED_SVG}"
 
-          if git diff --cached --quiet; then
-            echo "No changes detected."
-            exit 0
-          fi
+          for attempt in 1 2 3; do
+            echo "Push attempt ${attempt}/3"
 
-          git commit \
-            -m "chore: update profile observatory (${{ steps.theme.outputs.mode }})"
+            git fetch origin main
 
-          git push origin main
+            # Start from the latest remote main so existing commits
+            # are preserved and no rebase conflict is required.
+            git reset --hard origin/main
+
+            mkdir -p profile
+            cp "${GENERATED_SVG}" profile/observatory.svg
+
+            git add profile/observatory.svg
+
+            if git diff --cached --quiet; then
+              echo "Remote already contains the generated output."
+              exit 0
+            fi
+
+            git commit \
+              -m "chore: update profile observatory (${MODE})"
+
+            if git push origin HEAD:main; then
+              echo "Profile Observatory updated successfully."
+              exit 0
+            fi
+
+            echo "Push failed. Will refresh main and retry."
+            sleep 2
+          done
+
+          echo "::error::Could not push after three attempts."
+          exit 1
